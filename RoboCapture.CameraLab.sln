@@ -1,0 +1,28 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RoboCapture.Core", "src\RoboCapture.Core\RoboCapture.Core.csproj", "{A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RoboCapture.CameraLab", "src\RoboCapture.CameraLab\RoboCapture.CameraLab.csproj", "{A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA002}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RoboCapture.Persistence", "src\RoboCapture.Persistence\RoboCapture.Persistence.csproj", "{A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA003}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RoboCapture.Core.Tests", "tests\RoboCapture.Core.Tests\RoboCapture.Core.Tests.csproj", "{A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA004}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|Any CPU = Debug|Any CPU
+        Release|Any CPU = Release|Any CPU
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA003}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A14D7A4B-0B8B-4B10-8F9E-2D21DBFCA004}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    EndGlobalSection
+EndGlobal

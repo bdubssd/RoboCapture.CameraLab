@@ -28,3 +28,6 @@ The same `ICameraDriver` contract will be implemented by Canon, Nikon, Sony and 
 2. Add retry/recovery state machine.
 3. Add a real manufacturer adapter without changing `PoseEngine`.
 4. Run 1,000-shot reliability test.
+
+## Git handoff
+See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) to enable automatic pushes for significant commits on each computer.

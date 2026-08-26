@@ -1,0 +1,11 @@
+#!/bin/sh
+
+file_count=$(git show --format= --numstat HEAD | wc -l | tr -d ' ')
+line_count=$(git show --format= --numstat HEAD | awk '{ added += $1; deleted += $2 } END { print added + deleted }')
+
+if [ "$file_count" -ge "${ROBOCAPTURE_PUSH_FILES:-5}" ] || [ "$line_count" -ge "${ROBOCAPTURE_PUSH_LINES:-100}" ]; then
+    echo "Significant commit detected ($file_count files, $line_count lines); pushing to origin."
+    git push origin HEAD
+else
+    echo "Small commit kept local ($file_count files, $line_count lines)."
+fi

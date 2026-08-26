@@ -3,6 +3,8 @@ using RoboCapture.Core;
 
 namespace RoboCapture.Persistence;
 
+public sealed record IncompleteSession(string SessionId, string SubjectId, DateTimeOffset StartedUtc, int CaptureCount);
+
 public sealed class CaptureStore(string databasePath) : ICaptureRecorder
 {
     private string ConnectionString => new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
@@ -77,6 +79,23 @@ public sealed class CaptureStore(string databasePath) : ICaptureRecorder
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) states.Add(reader.GetString(0));
         return states;
+    }
+
+    public async Task<IReadOnlyList<IncompleteSession>> GetIncompleteSessionsAsync(CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.Id, s.SubjectId, s.StartedUtc, (SELECT COUNT(*) FROM Captures c WHERE c.SessionId = s.Id)
+            FROM Sessions s WHERE s.CompletedUtc IS NULL ORDER BY s.StartedUtc
+            """;
+        var sessions = new List<IncompleteSession>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            sessions.Add(new IncompleteSession(reader.GetString(0), reader.GetString(1),
+                DateTimeOffset.Parse(reader.GetString(2)), reader.GetInt32(3)));
+        return sessions;
     }
 
     public async Task RecordCameraEventAsync(CameraEvent cameraEvent, string? sessionId = null, string? subjectId = null, CancellationToken ct = default)

@@ -20,8 +20,12 @@ public sealed class MainWindow : Window
     private readonly TextBox _count = new() { Text = "10", MinWidth = 50 };
     private readonly TextBox _interval = new() { Text = "0", MinWidth = 50 };
     private readonly TextBox _log = new() { IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    private readonly TextBlock _rosterStatus = new() { Text = "Roster: none loaded (scans use raw value as subject ID)" };
+    private readonly StackPanel _recovery = new();
     private CancellationTokenSource? _operation;
     private int _attempts, _successes, _failures;
+    private IReadOnlyList<SubjectRecord> _roster = Array.Empty<SubjectRecord>();
+    private SubjectIdentifier? _identifier;
 
     public MainWindow()
     {
@@ -41,6 +45,7 @@ public sealed class MainWindow : Window
                 await _store.InitializeAsync();
                 Log("SQLite store initialized.");
                 UpdateCamera();
+                await RefreshRecoveryAsync();
             }
             catch (Exception exception) { Log($"ERROR: database initialization failed: {exception.Message}"); }
         };
@@ -59,6 +64,7 @@ public sealed class MainWindow : Window
         Add(buttons, "CAPTURE X N", CaptureMany); Add(buttons, "RUN STRESS TEST", Stress); Add(buttons, "STOP", Stop);
         Add(buttons, "INJECT DISCONNECT", InjectDisconnect); Add(buttons, "INJECT CAPTURE FAILURE", InjectCaptureFailure);
         Add(buttons, "INJECT TRANSFER FAILURE", InjectTransferFailure); Add(buttons, "CLEAR FAULTS", ClearFaults); Add(buttons, "RECONNECT", Connect);
+        Add(buttons, "LOAD ROSTER", LoadRoster);
         root.Children.Add(buttons);
         var inputs = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
         inputs.Children.Add(new Label { Content = "Subject" }); inputs.Children.Add(_subject);
@@ -70,12 +76,25 @@ public sealed class MainWindow : Window
             if (args.Key != System.Windows.Input.Key.Enter) return;
             var value = _scanInput.Text.Trim();
             if (value.Length == 0) { Log("ERROR: scan value is empty."); return; }
-            _subject.Text = value;
-            Log($"Scanner subject selected: {value}");
+            if (_identifier is not null)
+            {
+                var result = _identifier.Resolve(value);
+                if (result.Found)
+                {
+                    _subject.Text = result.Subject!.StudentId;
+                    Log($"Scanner resolved subject: {result.Subject.StudentId} ({result.Subject.FirstName} {result.Subject.LastName})");
+                }
+                else Log($"ERROR: {result.Error}");
+            }
+            else
+            {
+                _subject.Text = value;
+                Log($"Scanner subject selected: {value}");
+            }
             _scanInput.Clear();
         };
         root.Children.Add(inputs);
-        root.Children.Add(new StackPanel { Children = { _destination, _lastCapture, _counters } });
+        root.Children.Add(new StackPanel { Children = { _rosterStatus, _destination, _lastCapture, _counters, _recovery } });
         root.Children.Add(_log); return root;
     }
 
@@ -83,6 +102,42 @@ public sealed class MainWindow : Window
     {
         var button = new Button { Content = text, Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
         button.Click += async (_, _) => await action(); panel.Children.Add(button);
+    }
+
+    private Task LoadRoster()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "Roster CSV (*.csv)|*.csv|All files (*.*)|*.*" };
+        if (dialog.ShowDialog() != true) return Task.CompletedTask;
+        try
+        {
+            _roster = CsvRosterImporter.Parse(File.ReadAllText(dialog.FileName));
+            _identifier = new SubjectIdentifier(_roster);
+            _rosterStatus.Text = $"Roster: {_roster.Count} subjects loaded from {Path.GetFileName(dialog.FileName)}";
+            Log($"Roster loaded: {_roster.Count} subjects from {dialog.FileName}");
+        }
+        catch (Exception exception) { Log($"ERROR: roster load failed: {exception.Message}"); }
+        return Task.CompletedTask;
+    }
+
+    private async Task RefreshRecoveryAsync()
+    {
+        var incomplete = await _store.GetIncompleteSessionsAsync();
+        _recovery.Children.Clear();
+        if (incomplete.Count == 0) return;
+        _recovery.Children.Add(new TextBlock { Text = $"INCOMPLETE SESSIONS ({incomplete.Count}) — review before continuing:", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 8, 0, 2) });
+        foreach (var session in incomplete)
+        {
+            var row = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+            row.Children.Add(new TextBlock { Text = $"{session.StartedUtc:yyyy-MM-dd HH:mm} | subject {session.SubjectId} | {session.CaptureCount} shot(s) recorded | session {session.SessionId}", Margin = new Thickness(0, 0, 8, 0) });
+            var button = new Button { Content = "MARK REVIEWED", Padding = new Thickness(5, 1, 5, 1) };
+            button.Click += async (_, _) =>
+            {
+                try { await _store.CompleteSessionAsync(session.SessionId); Log($"Session {session.SessionId} marked reviewed."); await RefreshRecoveryAsync(); }
+                catch (Exception exception) { Log($"ERROR: could not mark session reviewed: {exception.Message}"); }
+            };
+            row.Children.Add(button);
+            _recovery.Children.Add(row);
+        }
     }
 
     private async Task Connect() { try { await _camera.ConnectAsync(); UpdateCamera(); Log("Connected."); } catch (Exception e) { Log($"ERROR: {e.Message}"); } }
@@ -111,7 +166,7 @@ public sealed class MainWindow : Window
             await _store.CompleteSessionAsync(sessionId, _operation.Token);
         }
         catch (OperationCanceledException) { Log("Operation stopped."); }
-        finally { _operation.Dispose(); _operation = null; }
+        finally { _operation.Dispose(); _operation = null; await RefreshRecoveryAsync(); }
     }
 
     private async Task Stress()

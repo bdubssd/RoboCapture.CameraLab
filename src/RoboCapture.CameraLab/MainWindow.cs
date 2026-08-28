@@ -1,6 +1,8 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using RoboCapture.Core;
 using RoboCapture.NikonAdapter;
 using RoboCapture.Persistence;
@@ -26,6 +28,8 @@ public sealed class MainWindow : Window
     private readonly ComboBox _cameraType = new() { MinWidth = 190 };
     private readonly TextBox _moduleFolder = new() { MinWidth = 260 };
     private readonly TextBox _moduleFile = new() { MinWidth = 150 };
+    private readonly Image _liveViewImage = new() { Width = 480, Height = 320, Stretch = Stretch.Uniform, Margin = new Thickness(0, 8, 0, 8) };
+    private readonly TextBlock _liveViewStatus = new() { Text = "Live view: off" };
     private CancellationTokenSource? _operation;
     private int _attempts, _successes, _failures;
     private IReadOnlyList<SubjectRecord> _roster = Array.Empty<SubjectRecord>();
@@ -60,6 +64,26 @@ public sealed class MainWindow : Window
             try { await _store.RecordCameraEventAsync(cameraEvent); }
             catch (Exception exception) { Log($"ERROR: event persistence failed: {exception.Message}"); }
         });
+        _liveViewImage.Source = null;
+        _liveViewStatus.Text = "Live view: off";
+        if (camera is NikonRemoteSdkV2CameraDriver nikon)
+            nikon.LiveViewFrame += frame => Dispatcher.InvokeAsync(() => UpdateLiveViewImage(frame));
+    }
+
+    private void UpdateLiveViewImage(byte[] jpegBytes)
+    {
+        try
+        {
+            using var stream = new MemoryStream(jpegBytes);
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = stream;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            _liveViewImage.Source = bitmap;
+        }
+        catch { /* skip a malformed frame rather than crash the UI thread */ }
     }
 
     private UIElement Layout()
@@ -98,6 +122,7 @@ public sealed class MainWindow : Window
         Add(buttons, "INJECT DISCONNECT", InjectDisconnect); Add(buttons, "INJECT CAPTURE FAILURE", InjectCaptureFailure);
         Add(buttons, "INJECT TRANSFER FAILURE", InjectTransferFailure); Add(buttons, "CLEAR FAULTS", ClearFaults); Add(buttons, "RECONNECT", Connect);
         Add(buttons, "LOAD ROSTER", LoadRoster);
+        Add(buttons, "LIVE VIEW ON", StartLiveView); Add(buttons, "LIVE VIEW OFF", StopLiveView);
         root.Children.Add(buttons);
         var inputs = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
         inputs.Children.Add(new Label { Content = "Subject" }); inputs.Children.Add(_subject);
@@ -128,6 +153,8 @@ public sealed class MainWindow : Window
         };
         root.Children.Add(inputs);
         root.Children.Add(new StackPanel { Children = { _rosterStatus, _destination, _lastCapture, _counters, _recovery } });
+        root.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { _liveViewStatus } });
+        root.Children.Add(_liveViewImage);
         root.Children.Add(_log); return root;
     }
 
@@ -259,6 +286,18 @@ public sealed class MainWindow : Window
     }
 
     private Task Stop() { _operation?.Cancel(); return Task.CompletedTask; }
+    private async Task StartLiveView()
+    {
+        if (_camera is not NikonRemoteSdkV2CameraDriver nikon) { Log("ERROR: live view is only available with the Nikon Remote SDK v2 driver."); return; }
+        try { await nikon.StartLiveViewAsync(); _liveViewStatus.Text = "Live view: on"; Log("Live view started."); }
+        catch (Exception exception) { Log($"ERROR: live view failed to start: {exception.Message}"); }
+    }
+    private async Task StopLiveView()
+    {
+        if (_camera is not NikonRemoteSdkV2CameraDriver nikon) { Log("ERROR: live view is only available with the Nikon Remote SDK v2 driver."); return; }
+        try { await nikon.StopLiveViewAsync(); _liveViewStatus.Text = "Live view: off"; _liveViewImage.Source = null; Log("Live view stopped."); }
+        catch (Exception exception) { Log($"ERROR: live view failed to stop: {exception.Message}"); }
+    }
     private Task InjectDisconnect()
     {
         if (_camera is SimulatedCameraDriver sim) { sim.InjectDisconnect(); Log("Next capture will disconnect."); }

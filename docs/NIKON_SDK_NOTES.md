@@ -9,9 +9,36 @@ Two `ICameraDriver` implementations exist in `src/RoboCapture.NikonAdapter`:
   `InitializeSDK`/`ConnectDevice`/`StartShooting` API.
 
 Both are verified against real hardware (Nikon D850, Nikon Z6III) on this machine's connected
-cameras. Neither is wired into `MainWindow` yet — `Program.cs` has a `--nikon-test=<dir>` CLI
-flag used for hardware verification during development (see `--nikon-module`, `--nikon-count`,
-`--nikon-legacy`).
+cameras, and both are wired into `MainWindow` via a Driver dropdown (Simulator / Nikon Legacy
+MAID3 / Nikon Remote SDK v2) with module-folder browse + Switch Camera. `Program.cs` also has
+CLI flags used for hardware verification during development: `--nikon-test=<dir>`
+(`--nikon-module`, `--nikon-count`, `--nikon-legacy`) for capture, and `--nikon-liveview=<dir>`
+for live view.
+
+## Live view (Z-series, Remote SDK v2)
+
+`NikonRemoteSdkV2CameraDriver` exposes `StartLiveViewAsync`/`StopLiveViewAsync` and a
+`LiveViewFrame` event (raw JPEG bytes per frame). Verified on a Z6III: ~19fps, each frame a
+consistent 708096-byte JPEG. Wired into `MainWindow` as LIVE VIEW ON/OFF buttons plus an `Image`
+control.
+
+The frame arrives wrapped in `NkMAIDLiveViewData` (`ulLvImageSize`, `wPhysicalBytes`,
+`wLogicalBits`, an embedded `NKMAIDLiveViewHeader` struct, then `pImageData`). That header
+carries ~30 fields of live-view telemetry (AF points, angles, face recognition, etc.) this
+driver doesn't need, so rather than hand-porting the whole struct into C#, `Maid3V2Native.cs`
+computes just the one offset that matters — `LiveViewImageDataOffset = 892` — by hand-counting
+the header's field sizes under `#pragma pack(2)`. This was risky enough to want empirical
+verification before trusting it: confirmed by checking every captured frame started with the
+JPEG SOI/DQT marker bytes (`FF D8 FF DB`), which it did, 155/155 frames in the test run.
+
+## Camera sleep drops the SDK connection
+
+Nikon's auto power-off suspends USB communication entirely — `InitializeSDK` then enumerates
+zero devices even though Windows still lists the camera's USB device with `Status: OK`. No
+software-side retry can fix this; the camera needs a physical wake (half shutter-press or any
+button). For unattended studio use, disable auto power-off in the camera's own menu for the
+duration of the tethered session — this is standard practice for all tethering tools, not
+specific to this driver.
 
 ## Getting the SDK
 

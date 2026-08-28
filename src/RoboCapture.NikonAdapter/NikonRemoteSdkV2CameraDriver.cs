@@ -45,12 +45,20 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
     private SetImageVideoSavePathDelegate? _setImageVideoSavePath;
     private SetCapabilityDelegate? _setCapability;
     private GetCapabilityDelegate? _getCapability;
+    private StartLiveViewDelegate? _startLiveView;
+    private StopLiveViewDelegate? _stopLiveView;
+    private GetLiveViewStatusDelegate? _getLiveViewStatus;
     private uint _connectedDeviceId;
 
     public string DriverId { get; }
     public CameraConnectionState State { get; private set; } = CameraConnectionState.Disconnected;
     public CameraInfo? Info { get; private set; }
     public event Action<CameraEvent>? Event;
+
+    /// <summary>Raised on each live-view frame (JPEG bytes) while live view is running. Fired
+    /// from whatever thread the SDK delivers the frame on — subscribers must marshal to their
+    /// own UI thread themselves.</summary>
+    public event Action<byte[]>? LiveViewFrame;
 
     public NikonRemoteSdkV2CameraDriver(string moduleDirectory, string moduleFileName = "ControlServiceLayer.dll")
     {
@@ -61,7 +69,7 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
         _progressProc = (_, _, _, _, _) => { };
         _uiRequestProc = (_, _) => 1; // kNkMAIDUIRequestResult_Ok
         _dataProc = (_, _, _) => 0; // Unused by StartShooting; file bytes arrive via ImageSavePath.
-        _liveViewDataProc = (_, _) => { };
+        _liveViewDataProc = HandleLiveViewData;
         _allocateMemory = size => Marshal.AllocHGlobal((int)size);
         _freeMemory = Marshal.FreeHGlobal;
         _worker = new Thread(WorkerLoop) { IsBackground = true, Name = "NikonRemoteSdkV2Worker" };
@@ -72,6 +80,15 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
     public Task DisconnectAsync(CancellationToken ct = default) => RunOnWorkerAsync(Disconnect);
     public Task<CaptureResult> CaptureAsync(CaptureRequest request, CancellationToken ct = default) =>
         RunOnWorkerAsync(() => Capture(request));
+
+    public Task StartLiveViewAsync() => RunOnWorkerAsync(() =>
+    {
+        if (_startLiveView is null) throw new InvalidOperationException("Camera is not connected.");
+        var result = _startLiveView(IntPtr.Zero, IntPtr.Zero);
+        if (result < 0) throw new InvalidOperationException($"Failed to start live view (result {result}).");
+    });
+
+    public Task StopLiveViewAsync() => RunOnWorkerAsync(() => { _stopLiveView?.Invoke(IntPtr.Zero, IntPtr.Zero); });
 
     public async ValueTask DisposeAsync()
     {
@@ -130,6 +147,9 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
             _setImageVideoSavePath = GetDelegate<SetImageVideoSavePathDelegate>("SetImageVideoSavePath");
             _setCapability = GetDelegate<SetCapabilityDelegate>("SetCapability");
             _getCapability = GetDelegate<GetCapabilityDelegate>("GetCapability");
+            _startLiveView = GetDelegate<StartLiveViewDelegate>("StartLiveView");
+            _stopLiveView = GetDelegate<StopLiveViewDelegate>("StopLiveView");
+            _getLiveViewStatus = GetDelegate<GetLiveViewStatusDelegate>("GetLiveViewStatus");
 
             var callback = new NkMaidCsCallback
             {
@@ -155,7 +175,9 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
                 var deviceList = Marshal.PtrToStructure<NkMaidEnumDevices>(deviceListPtr);
                 if (deviceList.Elements == 0)
                     throw new InvalidOperationException(
-                        "No Nikon camera detected. Check the USB connection and that the camera is powered on.");
+                        "No Nikon camera detected. Check the USB connection, that the camera is powered on, and " +
+                        "that it hasn't gone to sleep (auto power-off suspends USB communication entirely — wake " +
+                        "it with a half shutter-press, or disable auto power-off in the camera's menu for tethered sessions).");
 
                 var deviceSize = Marshal.SizeOf<NkMaidDeviceInfo>();
                 NkMaidDeviceInfo? selected = null;
@@ -202,6 +224,8 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
 
     private void Disconnect()
     {
+        if (_stopLiveView is not null && State == CameraConnectionState.Connected)
+            _stopLiveView(IntPtr.Zero, IntPtr.Zero);
         if (_disconnectDevice is not null && State == CameraConnectionState.Connected)
             _disconnectDevice();
         if (_freeSdk is not null && _libraryHandle != IntPtr.Zero)
@@ -219,6 +243,9 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
         _setImageVideoSavePath = null;
         _setCapability = null;
         _getCapability = null;
+        _startLiveView = null;
+        _stopLiveView = null;
+        _getLiveViewStatus = null;
         Info = null;
         State = CameraConnectionState.Disconnected;
         Event?.Invoke(new CameraEvent(DateTimeOffset.UtcNow, DriverId, State, "disconnect", "success"));
@@ -297,6 +324,25 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
         if (!task.Wait(timeout))
             throw new TimeoutException("Nikon Remote SDK shooting call timed out.");
         return task.Result;
+    }
+
+    private void HandleLiveViewData(IntPtr refClient, IntPtr liveViewDataPtr)
+    {
+        try
+        {
+            if (liveViewDataPtr == IntPtr.Zero) return;
+            var imageSize = (uint)Marshal.ReadInt32(liveViewDataPtr, 0);
+            if (imageSize == 0 || imageSize > 32 * 1024 * 1024) return; // sanity guard against a bad offset/frame
+            var imageDataPtr = Marshal.ReadIntPtr(liveViewDataPtr, Maid3V2.LiveViewImageDataOffset);
+            if (imageDataPtr == IntPtr.Zero) return;
+            var buffer = new byte[imageSize];
+            Marshal.Copy(imageDataPtr, buffer, 0, (int)imageSize);
+            LiveViewFrame?.Invoke(buffer);
+        }
+        catch
+        {
+            // Never let a malformed frame take down the SDK's callback thread.
+        }
     }
 
     private void HandleEvent(IntPtr refProc, uint eventId, IntPtr data)

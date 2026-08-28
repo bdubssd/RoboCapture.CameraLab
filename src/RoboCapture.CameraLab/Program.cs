@@ -24,6 +24,13 @@ public static class Program
             return;
         }
 
+        var nikonLiveViewArg = args.FirstOrDefault(arg => arg.StartsWith("--nikon-liveview=", StringComparison.OrdinalIgnoreCase));
+        if (nikonLiveViewArg is not null)
+        {
+            RunNikonLiveViewTestAsync(args, nikonLiveViewArg).GetAwaiter().GetResult();
+            return;
+        }
+
         var application = new Application();
         application.Run(new MainWindow());
     }
@@ -60,6 +67,40 @@ public static class Program
         }
         Console.WriteLine($"SUMMARY: {successes}/{shotCount} succeeded");
 
+        await camera.DisconnectAsync();
+    }
+
+    private static async Task RunNikonLiveViewTestAsync(string[] args, string nikonLiveViewArg)
+    {
+        var moduleDirectory = nikonLiveViewArg.Split('=', 2)[1];
+        var moduleFileName = args.FirstOrDefault(a => a.StartsWith("--nikon-module=", StringComparison.OrdinalIgnoreCase))
+            ?.Split('=', 2)[1] ?? "ControlServiceLayer.dll";
+
+        await using var camera = new NikonRemoteSdkV2CameraDriver(moduleDirectory, moduleFileName);
+        camera.Event += cameraEvent => Console.WriteLine($"EVENT {cameraEvent.Operation}: {cameraEvent.Result} {cameraEvent.Error}");
+
+        var frameCount = 0;
+        var folder = Path.Combine(Environment.CurrentDirectory, "captures", "nikon-liveview");
+        Directory.CreateDirectory(folder);
+        camera.LiveViewFrame += frame =>
+        {
+            frameCount++;
+            Console.WriteLine($"FRAME {frameCount}: {frame.Length} bytes, header={BitConverter.ToString(frame, 0, Math.Min(4, frame.Length))}");
+            if (frameCount <= 3)
+                File.WriteAllBytes(Path.Combine(folder, $"frame-{frameCount}.jpg"), frame);
+        };
+
+        Console.WriteLine("Connecting...");
+        await camera.ConnectAsync();
+        Console.WriteLine($"Connected: {camera.Info?.Manufacturer} {camera.Info?.Model}");
+
+        Console.WriteLine("Starting live view...");
+        await camera.StartLiveViewAsync();
+        Console.WriteLine("Live view started, waiting 8s for frames...");
+        await Task.Delay(8000);
+
+        Console.WriteLine($"Total frames received: {frameCount}");
+        await camera.StopLiveViewAsync();
         await camera.DisconnectAsync();
     }
 

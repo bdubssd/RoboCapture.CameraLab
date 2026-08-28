@@ -86,6 +86,15 @@ internal delegate int GetCapabilityDelegate(uint capabilityId, uint requestType,
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
 internal delegate int GetShootingStatusDelegate(out uint status);
 
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+internal delegate int StartLiveViewDelegate(IntPtr pProc, IntPtr nkRef);
+
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+internal delegate int StopLiveViewDelegate(IntPtr pProc, IntPtr nkRef);
+
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+internal delegate int GetLiveViewStatusDelegate(out uint status);
+
 internal static class Maid3V2
 {
     internal const uint ShootingTypeSingle = 1;
@@ -94,4 +103,12 @@ internal static class Maid3V2
     internal const uint CapSaveMedia = 0x8305;
     internal const uint SaveMediaSdram = 1;
     internal const uint SaveMediaCardAndSdram = 2;
+
+    // Byte offset of NkMAIDLiveViewData.pImageData, computed by hand from tagLiveViewHeader's
+    // field list in Maid3.h (884 bytes under #pragma pack(2)) plus the three fields preceding
+    // it (ulLvImageSize:4, wPhysicalBytes:2, wLogicalBits:2). Not represented as a full C#
+    // struct — the header carries live-view telemetry (AF points, angles, etc.) this driver
+    // doesn't use, and hand-porting ~30 nested fields precisely is riskier than computing the
+    // one offset we actually need.
+    internal const int LiveViewImageDataOffset = 4 + 2 + 2 + 884;
 }

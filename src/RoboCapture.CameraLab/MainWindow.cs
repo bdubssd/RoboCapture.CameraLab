@@ -23,6 +23,7 @@ public sealed class MainWindow : Window
     ];
 
     private ICameraDriver _camera = null!;
+    private int _activeSelectionIndex = 0; // matches _cameraType's initial Simulator selection
     private readonly CaptureStore _store = new(Path.Combine(Environment.CurrentDirectory, "robocapture.db"));
     private readonly TextBlock _cameraText = new();
     private readonly TextBlock _statusText = new();
@@ -356,15 +357,26 @@ public sealed class MainWindow : Window
             Log($"ERROR: could not create driver: {exception.Message}");
             WireCamera(new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 });
             _cameraType.SelectedIndex = 0;
+            _activeSelectionIndex = 0;
             UpdateCamera();
             return;
         }
         WireCamera(next);
+        _activeSelectionIndex = _cameraType.SelectedIndex;
         UpdateCamera();
         Log($"Camera driver switched to: {_cameraType.SelectedItem}");
     }
 
-    private async Task Connect() { try { await _camera.ConnectAsync(); UpdateCamera(); Log("Connected."); } catch (Exception e) { Log($"ERROR: {e.Message}"); } }
+    private async Task Connect()
+    {
+        if (_activeSelectionIndex != _cameraType.SelectedIndex)
+        {
+            Log($"Applying camera selection ({_cameraType.SelectedItem}) before connecting...");
+            await SwitchCamera();
+            if (_activeSelectionIndex != _cameraType.SelectedIndex) return; // SwitchCamera failed and logged why
+        }
+        try { await _camera.ConnectAsync(); UpdateCamera(); Log("Connected."); } catch (Exception e) { Log($"ERROR: {e.Message}"); }
+    }
     private async Task Disconnect() { await _camera.DisconnectAsync(); UpdateCamera(); Log("Disconnected."); }
     private Task Capture() => CaptureManyInternal(1);
     private Task CaptureMany() => int.TryParse(_count.Text, out var count) && count > 0 ? CaptureManyInternal(count) : Task.CompletedTask;

@@ -71,6 +71,35 @@ camera model(s), and unzip into `vendor-sdks/nikon/` locally (gitignored).
 Close Camera Control Pro 2, NX Tether, or Nikon Transfer 2 before connecting — the SDK's own
 docs warn Remote SDK v2 "may not operate correctly" if any of those hold the camera.
 
+## Fixed bug: repeated Connect/Disconnect within one process
+
+`NikonRemoteSdkV2CameraDriver` originally did a full `LoadLibrary` → `InitializeSDK` on every
+Connect and a full `FreeSDK` → `FreeLibrary` on every Disconnect. This works exactly once per
+process — a second `InitializeSDK` call in the *same* process, after a full unload/reload of
+`ControlServiceLayer.dll`, reliably fails with `result -117`
+(`kNkMAIDResult_UnexpectedError`), even though a fresh process's first attempt always succeeds.
+Confirmed via three consecutive Connect/Disconnect cycles in one process, each failing after
+the first.
+
+There was a second bug layered on top: a failed `InitializeSDK` left `_libraryHandle` non-zero,
+so every *subsequent* Connect skipped re-initialization entirely and fell through to reporting
+`State = Connected` with `Info` still `null` — a silent false success (UI showed "Connection:
+Connected" next to "Camera: unavailable").
+
+Fixed by splitting initialization from device connection:
+- `InitializeSdkCore()` (`LoadLibrary` + `InitializeSDK`) now runs at most **once** per driver
+  instance, guarded by `_sdkInitialized`. A failure here does a full teardown so a retry starts
+  clean.
+- `ConnectDeviceCore()` (device discovery + `ConnectDevice`) runs on every `Connect()`, using
+  `EnumDevices` — the SDK's own documented call for refreshing the device list on an
+  already-initialized session — rather than re-calling `InitializeSDK`.
+- `Disconnect()` only calls `DisconnectDevice`; it no longer tears down the library or the SDK
+  session. Only `DisposeAsync()` does that, when the driver itself is being discarded (e.g. on
+  Switch Camera).
+
+Verified live: three Connect → Disconnect → Connect cycles in one process, zero `-117` errors,
+each ending in a genuinely connected state with `Info` populated correctly.
+
 ## Known limitation: Z-series repeat-capture download
 
 **Symptom:** `NikonRemoteSdkV2CameraDriver.CaptureAsync` reliably shoots and downloads on the

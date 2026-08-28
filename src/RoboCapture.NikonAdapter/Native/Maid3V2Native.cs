@@ -95,6 +95,9 @@ internal delegate int StopLiveViewDelegate(IntPtr pProc, IntPtr nkRef);
 [UnmanagedFunctionPointer(CallingConvention.StdCall)]
 internal delegate int GetLiveViewStatusDelegate(out uint status);
 
+[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+internal delegate int EnumDevicesDelegate(out IntPtr ppDeviceList, IntPtr pProc, IntPtr nkRef);
+
 internal static class Maid3V2
 {
     internal const uint ShootingTypeSingle = 1;

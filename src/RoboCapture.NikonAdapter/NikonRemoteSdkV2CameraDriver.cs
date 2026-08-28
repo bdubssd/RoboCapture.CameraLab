@@ -37,6 +37,7 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
     private readonly FreeMemoryDelegate _freeMemory;
 
     private IntPtr _libraryHandle;
+    private bool _sdkInitialized;
     private InitializeSdkDelegate? _initializeSdk;
     private FreeSdkDelegate? _freeSdk;
     private ConnectDeviceDelegate? _connectDevice;
@@ -131,84 +132,128 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
     {
         if (_libraryHandle == IntPtr.Zero)
         {
-            var moduleDirectory = Path.GetFullPath(_moduleDirectory);
-            Kernel32.SetDllDirectoryW(moduleDirectory);
-            var modulePath = Path.GetFullPath(Path.Combine(moduleDirectory, _moduleFileName));
-            _libraryHandle = Kernel32.LoadLibraryW(modulePath);
-            if (_libraryHandle == IntPtr.Zero)
-                throw new InvalidOperationException(
-                    $"Failed to load Nikon module '{modulePath}' (Win32 error {Marshal.GetLastWin32Error()}).");
-
-            _initializeSdk = GetDelegate<InitializeSdkDelegate>("InitializeSDK");
-            _freeSdk = GetDelegate<FreeSdkDelegate>("FreeSDK");
-            _connectDevice = GetDelegate<ConnectDeviceDelegate>("ConnectDevice");
-            _disconnectDevice = GetDelegate<DisconnectDeviceDelegate>("DisconnectDevice");
-            _startShooting = GetDelegate<StartShootingDelegate>("StartShooting");
-            _setImageVideoSavePath = GetDelegate<SetImageVideoSavePathDelegate>("SetImageVideoSavePath");
-            _setCapability = GetDelegate<SetCapabilityDelegate>("SetCapability");
-            _getCapability = GetDelegate<GetCapabilityDelegate>("GetCapability");
-            _startLiveView = GetDelegate<StartLiveViewDelegate>("StartLiveView");
-            _stopLiveView = GetDelegate<StopLiveViewDelegate>("StopLiveView");
-            _getLiveViewStatus = GetDelegate<GetLiveViewStatusDelegate>("GetLiveViewStatus");
-
-            var callback = new NkMaidCsCallback
-            {
-                UiReqProc = Marshal.GetFunctionPointerForDelegate(_uiRequestProc),
-                EventProc = Marshal.GetFunctionPointerForDelegate(_eventProc),
-                ProgressProc = Marshal.GetFunctionPointerForDelegate(_progressProc),
-                DataProc = Marshal.GetFunctionPointerForDelegate(_dataProc),
-                LiveViewDataProc = Marshal.GetFunctionPointerForDelegate(_liveViewDataProc),
-                RefProc = IntPtr.Zero
-            };
-            var callbackPtr = Marshal.AllocHGlobal(Marshal.SizeOf<NkMaidCsCallback>());
             try
             {
-                Marshal.StructureToPtr(callback, callbackPtr, false);
-                var allocPtr = Marshal.GetFunctionPointerForDelegate(_allocateMemory);
-                var freePtr = Marshal.GetFunctionPointerForDelegate(_freeMemory);
-                var initResult = _initializeSdk(allocPtr, freePtr, callbackPtr, out var deviceListPtr, IntPtr.Zero);
-                if (initResult != 0)
-                    throw new InvalidOperationException($"Failed to initialize Nikon Remote SDK (result {initResult}).");
-
-                if (deviceListPtr == IntPtr.Zero)
-                    throw new InvalidOperationException("Nikon Remote SDK returned no device list.");
-                var deviceList = Marshal.PtrToStructure<NkMaidEnumDevices>(deviceListPtr);
-                if (deviceList.Elements == 0)
-                    throw new InvalidOperationException(
-                        "No Nikon camera detected. Check the USB connection, that the camera is powered on, and " +
-                        "that it hasn't gone to sleep (auto power-off suspends USB communication entirely — wake " +
-                        "it with a half shutter-press, or disable auto power-off in the camera's menu for tethered sessions).");
-
-                var deviceSize = Marshal.SizeOf<NkMaidDeviceInfo>();
-                NkMaidDeviceInfo? selected = null;
-                for (var i = 0; i < deviceList.Elements; i++)
-                {
-                    var device = Marshal.PtrToStructure<NkMaidDeviceInfo>(deviceList.DeviceData + i * deviceSize);
-                    if (device.Availability != 0) { selected = device; break; }
-                }
-                if (selected is null)
-                    throw new InvalidOperationException("A Nikon camera is listed but not available for connection.");
-
-                var connectResult = _connectDevice(selected.Value.Id, IntPtr.Zero);
-                if (connectResult != 0)
-                    throw new InvalidOperationException($"Failed to connect to Nikon camera (result {connectResult}).");
-
-                _connectedDeviceId = selected.Value.Id;
-                Info = new CameraInfo("Nikon", selected.Value.Name, selected.Value.Id.ToString(),
-                    CameraCapabilities.Capture | CameraCapabilities.Download, CameraCompatibilityTier.Full);
-
-                // Cameras default to card-only saving; without SDRAM (host-downloadable) enabled,
-                // shooting succeeds but no bytes are ever offered to this process. See the class
-                // doc comment: this reliably works for the first shot per power-cycle only.
-                SetSaveMedia(0);
-                Thread.Sleep(150);
-                SetSaveMedia(Maid3V2.SaveMediaCardAndSdram);
+                ConnectCore();
             }
-            finally { Marshal.FreeHGlobal(callbackPtr); }
+            catch
+            {
+                // A partial failure here (library loaded but InitializeSDK/ConnectDevice
+                // didn't succeed) must not leave _libraryHandle set — otherwise the next
+                // Connect() call sees a non-zero handle, skips this whole block, and falls
+                // through to reporting State=Connected with Info still null.
+                TeardownLibrary();
+                throw;
+            }
         }
 
         State = CameraConnectionState.Connected;
         Event?.Invoke(new CameraEvent(DateTimeOffset.UtcNow, DriverId, State, "connect", "success"));
+    }
+
+    private void ConnectCore()
+    {
+        var moduleDirectory = Path.GetFullPath(_moduleDirectory);
+        Kernel32.SetDllDirectoryW(moduleDirectory);
+        var modulePath = Path.GetFullPath(Path.Combine(moduleDirectory, _moduleFileName));
+        _libraryHandle = Kernel32.LoadLibraryW(modulePath);
+        if (_libraryHandle == IntPtr.Zero)
+            throw new InvalidOperationException(
+                $"Failed to load Nikon module '{modulePath}' (Win32 error {Marshal.GetLastWin32Error()}).");
+
+        _initializeSdk = GetDelegate<InitializeSdkDelegate>("InitializeSDK");
+        _freeSdk = GetDelegate<FreeSdkDelegate>("FreeSDK");
+        _connectDevice = GetDelegate<ConnectDeviceDelegate>("ConnectDevice");
+        _disconnectDevice = GetDelegate<DisconnectDeviceDelegate>("DisconnectDevice");
+        _startShooting = GetDelegate<StartShootingDelegate>("StartShooting");
+        _setImageVideoSavePath = GetDelegate<SetImageVideoSavePathDelegate>("SetImageVideoSavePath");
+        _setCapability = GetDelegate<SetCapabilityDelegate>("SetCapability");
+        _getCapability = GetDelegate<GetCapabilityDelegate>("GetCapability");
+        _startLiveView = GetDelegate<StartLiveViewDelegate>("StartLiveView");
+        _stopLiveView = GetDelegate<StopLiveViewDelegate>("StopLiveView");
+        _getLiveViewStatus = GetDelegate<GetLiveViewStatusDelegate>("GetLiveViewStatus");
+
+        var callback = new NkMaidCsCallback
+        {
+            UiReqProc = Marshal.GetFunctionPointerForDelegate(_uiRequestProc),
+            EventProc = Marshal.GetFunctionPointerForDelegate(_eventProc),
+            ProgressProc = Marshal.GetFunctionPointerForDelegate(_progressProc),
+            DataProc = Marshal.GetFunctionPointerForDelegate(_dataProc),
+            LiveViewDataProc = Marshal.GetFunctionPointerForDelegate(_liveViewDataProc),
+            RefProc = IntPtr.Zero
+        };
+        var callbackPtr = Marshal.AllocHGlobal(Marshal.SizeOf<NkMaidCsCallback>());
+        try
+        {
+            Marshal.StructureToPtr(callback, callbackPtr, false);
+            var allocPtr = Marshal.GetFunctionPointerForDelegate(_allocateMemory);
+            var freePtr = Marshal.GetFunctionPointerForDelegate(_freeMemory);
+            var initResult = _initializeSdk(allocPtr, freePtr, callbackPtr, out var deviceListPtr, IntPtr.Zero);
+            if (initResult != 0)
+                throw new InvalidOperationException($"Failed to initialize Nikon Remote SDK (result {initResult}).");
+            _sdkInitialized = true;
+
+            if (deviceListPtr == IntPtr.Zero)
+                throw new InvalidOperationException("Nikon Remote SDK returned no device list.");
+            var deviceList = Marshal.PtrToStructure<NkMaidEnumDevices>(deviceListPtr);
+            if (deviceList.Elements == 0)
+                throw new InvalidOperationException(
+                    "No Nikon camera detected. Check the USB connection, that the camera is powered on, and " +
+                    "that it hasn't gone to sleep (auto power-off suspends USB communication entirely — wake " +
+                    "it with a half shutter-press, or disable auto power-off in the camera's menu for tethered sessions).");
+
+            var deviceSize = Marshal.SizeOf<NkMaidDeviceInfo>();
+            NkMaidDeviceInfo? selected = null;
+            for (var i = 0; i < deviceList.Elements; i++)
+            {
+                var device = Marshal.PtrToStructure<NkMaidDeviceInfo>(deviceList.DeviceData + i * deviceSize);
+                if (device.Availability != 0) { selected = device; break; }
+            }
+            if (selected is null)
+                throw new InvalidOperationException("A Nikon camera is listed but not available for connection.");
+
+            var connectResult = _connectDevice(selected.Value.Id, IntPtr.Zero);
+            if (connectResult != 0)
+                throw new InvalidOperationException($"Failed to connect to Nikon camera (result {connectResult}).");
+
+            _connectedDeviceId = selected.Value.Id;
+            Info = new CameraInfo("Nikon", selected.Value.Name, selected.Value.Id.ToString(),
+                CameraCapabilities.Capture | CameraCapabilities.Download, CameraCompatibilityTier.Full);
+
+            // Cameras default to card-only saving; without SDRAM (host-downloadable) enabled,
+            // shooting succeeds but no bytes are ever offered to this process. See the class
+            // doc comment: this reliably works for the first shot per power-cycle only.
+            SetSaveMedia(0);
+            Thread.Sleep(150);
+            SetSaveMedia(Maid3V2.SaveMediaCardAndSdram);
+        }
+        finally { Marshal.FreeHGlobal(callbackPtr); }
+    }
+
+    private void TeardownLibrary()
+    {
+        if (_sdkInitialized && _freeSdk is not null)
+        {
+            try { _freeSdk(); } catch { /* best effort — we're already tearing down */ }
+        }
+        _sdkInitialized = false;
+        if (_libraryHandle != IntPtr.Zero)
+        {
+            Kernel32.FreeLibrary(_libraryHandle);
+            _libraryHandle = IntPtr.Zero;
+        }
+        _initializeSdk = null;
+        _freeSdk = null;
+        _connectDevice = null;
+        _disconnectDevice = null;
+        _startShooting = null;
+        _setImageVideoSavePath = null;
+        _setCapability = null;
+        _getCapability = null;
+        _startLiveView = null;
+        _stopLiveView = null;
+        _getLiveViewStatus = null;
+        Info = null;
     }
 
     private void SetSaveMedia(uint value)
@@ -228,25 +273,7 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
             _stopLiveView(IntPtr.Zero, IntPtr.Zero);
         if (_disconnectDevice is not null && State == CameraConnectionState.Connected)
             _disconnectDevice();
-        if (_freeSdk is not null && _libraryHandle != IntPtr.Zero)
-            _freeSdk();
-        if (_libraryHandle != IntPtr.Zero)
-        {
-            Kernel32.FreeLibrary(_libraryHandle);
-            _libraryHandle = IntPtr.Zero;
-        }
-        _initializeSdk = null;
-        _freeSdk = null;
-        _connectDevice = null;
-        _disconnectDevice = null;
-        _startShooting = null;
-        _setImageVideoSavePath = null;
-        _setCapability = null;
-        _getCapability = null;
-        _startLiveView = null;
-        _stopLiveView = null;
-        _getLiveViewStatus = null;
-        Info = null;
+        TeardownLibrary();
         State = CameraConnectionState.Disconnected;
         Event?.Invoke(new CameraEvent(DateTimeOffset.UtcNow, DriverId, State, "disconnect", "success"));
     }

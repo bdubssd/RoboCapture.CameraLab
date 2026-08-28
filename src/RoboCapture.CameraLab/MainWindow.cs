@@ -11,6 +11,17 @@ namespace RoboCapture.CameraLab;
 
 public sealed class MainWindow : Window
 {
+    private sealed record CameraProfile(string DisplayName, string ModuleFolder, string ModuleFile, bool IsLegacy, string[] DetectKeywords);
+
+    // Only cameras whose SDK module is actually assembled under vendor-sdks/nikon/modules/ so
+    // far. Other bodies (D700, D600, ...) still work via "Custom (advanced)" below once their
+    // module folder is set up the same way — see docs/NIKON_SDK_NOTES.md.
+    private static readonly CameraProfile[] KnownProfiles =
+    [
+        new("Nikon D850", "vendor-sdks/nikon/modules/d850", "Type0022.md3", true, ["D850"]),
+        new("Nikon Z6III", "vendor-sdks/nikon/modules/z-unified", "ControlServiceLayer.dll", false, ["Z6_3", "Z6III", "Z 6III", "Z6 III"]),
+    ];
+
     private ICameraDriver _camera = null!;
     private readonly CaptureStore _store = new(Path.Combine(Environment.CurrentDirectory, "robocapture.db"));
     private readonly TextBlock _cameraText = new();
@@ -28,6 +39,7 @@ public sealed class MainWindow : Window
     private readonly ComboBox _cameraType = new() { MinWidth = 190 };
     private readonly TextBox _moduleFolder = new() { MinWidth = 260 };
     private readonly TextBox _moduleFile = new() { MinWidth = 150 };
+    private readonly TextBlock _detectStatus = new() { Text = "Camera detection: not run yet", Margin = new Thickness(0, 4, 0, 0) };
     private readonly Image _liveViewImage = new() { Width = 480, Height = 320, Stretch = Stretch.Uniform, Margin = new Thickness(0, 8, 0, 8) };
     private readonly TextBlock _liveViewStatus = new() { Text = "Live view: off" };
     private CancellationTokenSource? _operation;
@@ -51,6 +63,7 @@ public sealed class MainWindow : Window
                 await RefreshRecoveryAsync();
             }
             catch (Exception exception) { Log($"ERROR: database initialization failed: {exception.Message}"); }
+            DetectCamera();
         };
         Closed += async (_, _) => await _camera.DisposeAsync();
     }
@@ -97,26 +110,36 @@ public sealed class MainWindow : Window
         header.Children.Add(_cameraText); header.Children.Add(_statusText);
         root.Children.Add(header);
 
-        // Step 1: pick a driver.
+        // Step 1: pick a camera.
         root.Children.Add(SectionHeader("1. CHOOSE CAMERA"));
-        var driverRow = new WrapPanel();
+        var detectRow = new WrapPanel();
+        var detectButton = new Button { Content = "AUTO-DETECT CAMERA", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        detectButton.Click += (_, _) => DetectCamera();
+        detectRow.Children.Add(detectButton); detectRow.Children.Add(_detectStatus);
+        root.Children.Add(detectRow);
+
+        var driverRow = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
         _cameraType.Items.Add("Simulator");
-        _cameraType.Items.Add("Nikon (Legacy MAID3)");
-        _cameraType.Items.Add("Nikon (Remote SDK v2)");
+        foreach (var profile in KnownProfiles) _cameraType.Items.Add(profile.DisplayName);
+        _cameraType.Items.Add("Custom (advanced)");
         _cameraType.SelectedIndex = 0;
         _cameraType.SelectionChanged += (_, _) => UpdateDriverFields();
-        driverRow.Children.Add(new Label { Content = "Driver" }); driverRow.Children.Add(_cameraType);
-        driverRow.Children.Add(new Label { Content = "Module folder" }); driverRow.Children.Add(_moduleFolder);
+        driverRow.Children.Add(new Label { Content = "Camera" }); driverRow.Children.Add(_cameraType);
+        root.Children.Add(driverRow);
+
+        var advancedRow = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+        advancedRow.Children.Add(new Label { Content = "Module folder" }); advancedRow.Children.Add(_moduleFolder);
         var browseButton = new Button { Content = "BROWSE...", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
         browseButton.Click += (_, _) =>
         {
             var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Select the Nikon module folder" };
             if (dialog.ShowDialog() == true) _moduleFolder.Text = dialog.FolderName;
         };
-        driverRow.Children.Add(browseButton);
-        driverRow.Children.Add(new Label { Content = "Module file" }); driverRow.Children.Add(_moduleFile);
-        root.Children.Add(driverRow);
-        var switchButton = new Button { Content = "SWITCH CAMERA (apply the driver above)", Margin = new Thickness(2, 6, 2, 2), Padding = new Thickness(7, 4, 7, 4), FontWeight = FontWeights.Bold };
+        advancedRow.Children.Add(browseButton);
+        advancedRow.Children.Add(new Label { Content = "Module file" }); advancedRow.Children.Add(_moduleFile);
+        root.Children.Add(advancedRow);
+
+        var switchButton = new Button { Content = "SWITCH CAMERA (apply the selection above)", Margin = new Thickness(2, 6, 2, 2), Padding = new Thickness(7, 4, 7, 4), FontWeight = FontWeights.Bold };
         switchButton.Click += async (_, _) => await SwitchCamera();
         root.Children.Add(switchButton);
         UpdateDriverFields();
@@ -227,12 +250,84 @@ public sealed class MainWindow : Window
         }
     }
 
+    private CameraProfile? SelectedProfile =>
+        _cameraType.SelectedIndex >= 1 && _cameraType.SelectedIndex <= KnownProfiles.Length
+            ? KnownProfiles[_cameraType.SelectedIndex - 1] : null;
+    private bool IsCustomSelected => _cameraType.SelectedIndex == KnownProfiles.Length + 1;
+
     private void UpdateDriverFields()
     {
-        var isNikon = _cameraType.SelectedIndex is 1 or 2;
-        _moduleFolder.IsEnabled = isNikon;
-        if (!isNikon) return;
-        _moduleFile.Text = _cameraType.SelectedIndex == 1 ? "Type0022.md3" : "ControlServiceLayer.dll";
+        var profile = SelectedProfile;
+        if (profile is not null)
+        {
+            _moduleFolder.Text = profile.ModuleFolder;
+            _moduleFile.Text = profile.ModuleFile;
+            _moduleFolder.IsEnabled = false;
+            _moduleFile.IsEnabled = false;
+        }
+        else if (IsCustomSelected)
+        {
+            _moduleFolder.IsEnabled = true;
+            _moduleFile.IsEnabled = true;
+        }
+        else // Simulator
+        {
+            _moduleFolder.Text = string.Empty;
+            _moduleFile.Text = string.Empty;
+            _moduleFolder.IsEnabled = false;
+            _moduleFile.IsEnabled = false;
+        }
+    }
+
+    private static IReadOnlyList<string> GetConnectedNikonDeviceNames()
+    {
+        var names = new List<string>();
+        try
+        {
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                "SELECT Name FROM Win32_PnPEntity WHERE Name LIKE '%Nikon%' OR Name LIKE '%Z6%' OR Name LIKE '%Z7%' OR Name LIKE '%Z8%' OR Name LIKE '%Z9%' OR Name LIKE '%Z5%' OR Name LIKE '%Zf%'");
+            foreach (var obj in searcher.Get())
+            {
+                var name = obj["Name"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
+            }
+        }
+        catch (Exception exception)
+        {
+            names.Add($"__error__{exception.Message}");
+        }
+        return names;
+    }
+
+    private void DetectCamera()
+    {
+        var names = GetConnectedNikonDeviceNames();
+        if (names.Count == 1 && names[0].StartsWith("__error__"))
+        {
+            _detectStatus.Text = $"Camera detection: unavailable ({names[0][9..]})";
+            Log($"Auto-detect failed: {names[0][9..]}");
+            return;
+        }
+        if (names.Count == 0)
+        {
+            _detectStatus.Text = "Camera detection: no Nikon camera found (check USB connection and that it's powered on)";
+            Log("Auto-detect: no Nikon camera found.");
+            return;
+        }
+
+        var matched = KnownProfiles.FirstOrDefault(profile =>
+            names.Any(name => profile.DetectKeywords.Any(keyword => name.Contains(keyword, StringComparison.OrdinalIgnoreCase))));
+        if (matched is not null)
+        {
+            _detectStatus.Text = $"Camera detection: found {matched.DisplayName} — selected below";
+            Log($"Auto-detect: found {matched.DisplayName} ({string.Join(", ", names)}).");
+            _cameraType.SelectedIndex = Array.IndexOf(KnownProfiles, matched) + 1;
+        }
+        else
+        {
+            _detectStatus.Text = $"Camera detection: Nikon device present ({string.Join(", ", names)}) but no matching profile — use Custom (advanced)";
+            Log($"Auto-detect: unrecognized Nikon device(s): {string.Join(", ", names)}.");
+        }
     }
 
     private async Task SwitchCamera()
@@ -245,15 +340,16 @@ public sealed class MainWindow : Window
         catch (Exception exception) { Log($"WARNING: error disconnecting previous camera: {exception.Message}"); }
         await _camera.DisposeAsync();
 
+        var profile = SelectedProfile;
+        var isLegacy = profile?.IsLegacy ?? _moduleFile.Text.EndsWith(".md3", StringComparison.OrdinalIgnoreCase);
         ICameraDriver next;
         try
         {
-            next = _cameraType.SelectedIndex switch
-            {
-                1 => new NikonCameraDriver(_moduleFolder.Text, _moduleFile.Text),
-                2 => new NikonRemoteSdkV2CameraDriver(_moduleFolder.Text, _moduleFile.Text),
-                _ => new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 }
-            };
+            next = _cameraType.SelectedIndex == 0
+                ? new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 }
+                : isLegacy
+                    ? new NikonCameraDriver(_moduleFolder.Text, _moduleFile.Text)
+                    : new NikonRemoteSdkV2CameraDriver(_moduleFolder.Text, _moduleFile.Text);
         }
         catch (Exception exception)
         {

@@ -9,11 +9,23 @@ Two `ICameraDriver` implementations exist in `src/RoboCapture.NikonAdapter`:
   `InitializeSDK`/`ConnectDevice`/`StartShooting` API.
 
 Both are verified against real hardware (Nikon D850, Nikon Z6III) on this machine's connected
-cameras, and both are wired into `MainWindow` via a Driver dropdown (Simulator / Nikon Legacy
-MAID3 / Nikon Remote SDK v2) with module-folder browse + Switch Camera. `Program.cs` also has
-CLI flags used for hardware verification during development: `--nikon-test=<dir>`
-(`--nikon-module`, `--nikon-count`, `--nikon-legacy`) for capture, and `--nikon-liveview=<dir>`
-for live view.
+cameras, and both are wired into `MainWindow` via a **Camera** dropdown listing real camera
+names (not SDK jargon) — "Simulator", "Nikon D850", "Nikon Z6III", or "Custom (advanced)" for
+any other body once its module folder is set up. `MainWindow.KnownProfiles` maps each named
+camera to its module folder/file/API-generation; selecting one auto-fills and locks those
+fields, "Custom" exposes manual folder browse + filename entry the same way for anything not
+in the list yet.
+
+An **AUTO-DETECT CAMERA** button (also run automatically on window load) queries
+`Win32_PnPEntity` via WMI for connected Nikon devices and matches the reported name against each
+profile's `DetectKeywords`, auto-selecting the matching camera in the dropdown. This only tells
+you a camera profile is *present*; connecting still goes through the normal Connect step (which
+is also where the "camera is asleep" case surfaces, since a sleeping camera won't respond to a
+real connection attempt even if the USB device is still enumerated).
+
+`Program.cs` also has CLI flags used for hardware verification during development:
+`--nikon-test=<dir>` (`--nikon-module`, `--nikon-count`, `--nikon-legacy`) for capture, and
+`--nikon-liveview=<dir>` for live view.
 
 ## Live view (Z-series, Remote SDK v2)
 

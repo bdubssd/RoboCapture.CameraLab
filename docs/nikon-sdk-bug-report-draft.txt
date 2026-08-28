@@ -1,0 +1,74 @@
+Subject: Remote SDK v2 (ControlServiceLayer.dll) — StartShooting only downloads the first shot per camera power-cycle
+
+Camera: Nikon Z6III
+SDK: Remote SDK v2.0.0 (S-SDKZ-200BF-ALLIN), ControlServiceLayer.dll
+Platform: Windows 11 64-bit, .NET 8, x64 process, custom P/Invoke client (not a Visual Studio C++ client)
+
+Summary
+-------
+Using the Simplified API (InitializeSDK -> ConnectDevice -> StartShooting with a real
+ImageSavePath directory), only the very first StartShooting call after the camera powers on
+ever produces a downloaded file. Every subsequent call — same connected session, or a fresh
+Disconnect/FreeSDK/reconnect cycle — fires the shutter and returns kNkMAIDResult_NoError, but
+no file is ever written to ImageSavePath.
+
+Setup
+-----
+1. InitializeSDK with AllocateMemory/FreeMemory callbacks and a full NkMAIDCSCallback
+   (EventProc, ProgressProc, DataProc, UIRequestProc, LiveViewDataProc all set to real
+   function pointers — a null LiveViewDataProc causes InitializeSDK to return
+   kNkMAIDAPIResult_InvalidArguments (-93), which is itself surprising for an API not being
+   exercised).
+2. ConnectDevice with the listed available device ID. Succeeds; device info correctly reports
+   "Z6_3".
+3. SetCapability(kNkMAIDCapability_SaveMedia, &value, kNkMAIDDataType_UnsignedPtr) with
+   value=2 (Card+SDRAM). GetCapability confirms the value reads back as 2 every time.
+4. StartShooting with ShootingType=kNkSDKShootingTypeSingle, pProc=NULL (synchronous),
+   ImageSavePath set to a real, writable directory.
+
+Observed behaviour
+-------------------
+First call after camera power-on:
+  - Shutter fires.
+  - kNkMAIDEvent_CaptureComplete (0x108) fires — I did not log the `data` parameter on this
+    successful run, but a file appears in ImageSavePath within ~200ms: a valid, full-resolution
+    (6048x4032) JPEG with correct Nikon EXIF.
+
+Every call after that (same session or after Disconnect/FreeSDK + fresh
+InitializeSDK/ConnectDevice):
+  - StartShooting still returns kNkMAIDResult_NoError.
+  - Shutter still fires (confirmed visually/audibly each time).
+  - kNkMAIDEvent_CaptureComplete (0x108) fires with data=1 ("the all images are finished to
+    record in card" per MAID3-COMMON(E).pdf section 4.4).
+  - The SDRAM half of that event (data=0, "the all SDRAM images are finished to read or
+    deleted") never arrives.
+  - No file ever appears at ImageSavePath, even waiting 30+ seconds.
+  - GetShootingStatus polled throughout the wait consistently reports
+    kNkSDKShootingFinishedOrNotStarted (0) — the SDK believes shooting is idle/complete the
+    entire time, it simply never delivers the SDRAM data.
+
+The camera reliably recovers after a power cycle: the next StartShooting after turning the
+camera off and back on succeeds again exactly once, then the pattern repeats.
+
+What I ruled out
+-----------------
+- SaveMedia not actually applied: ruled out via GetCapability readback (always reads back the
+  value just set).
+- Needing to re-set SaveMedia before every shot, or forcing a 0->2 transition each time (in
+  case the setting is edge-triggered): no change.
+- SaveMedia=1 (SDRAM only, no card): shutter does not fire at all in this mode — camera appears
+  to require a valid card destination to shoot regardless of SaveMedia.
+- Interference from GetShootingStatus polling during the wait: removed it entirely, no change.
+- Mixing the v2 API with the legacy MAIDEntryPoint object graph (Module/Source/Item/DataObj +
+  Capture/Acquire, which your D850 usage doc documents as the correct SDRAM-shooting flow):
+  ControlServiceLayer.dll does export MAIDEntryPoint, but opening the legacy Module object
+  after InitializeSDK/ConnectDevice has already run fails immediately with
+  kNkMAIDResult_UnexpectedError (-117) — the v2 session appears to hold the underlying MAID3
+  session exclusively, so the two APIs cannot be used side by side in the same process.
+
+Request
+-------
+Is this a known limitation of Remote SDK v2 / ControlServiceLayer.dll on the Z6III, or is there
+an additional capability/step required between shots to re-arm the SDRAM buffer for the next
+StartShooting call? Any repro guidance, sample code for repeated tethered stills capture, or a
+fixed SDK version would be appreciated.

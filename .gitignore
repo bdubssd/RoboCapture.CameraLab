@@ -4,6 +4,8 @@
 *.user
 *.suo
 *.db
+*.db-shm
+*.db-wal
 captures/*
 vendor-sdks/
 nikon-test-out.txt

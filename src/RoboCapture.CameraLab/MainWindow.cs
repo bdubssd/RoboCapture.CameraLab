@@ -2,13 +2,14 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using RoboCapture.Core;
+using RoboCapture.NikonAdapter;
 using RoboCapture.Persistence;
 
 namespace RoboCapture.CameraLab;
 
 public sealed class MainWindow : Window
 {
-    private readonly SimulatedCameraDriver _camera = new() { CaptureLatencyMs = 25, TransferLatencyMs = 10 };
+    private ICameraDriver _camera = null!;
     private readonly CaptureStore _store = new(Path.Combine(Environment.CurrentDirectory, "robocapture.db"));
     private readonly TextBlock _cameraText = new();
     private readonly TextBlock _statusText = new();
@@ -22,6 +23,9 @@ public sealed class MainWindow : Window
     private readonly TextBox _log = new() { IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly TextBlock _rosterStatus = new() { Text = "Roster: none loaded (scans use raw value as subject ID)" };
     private readonly StackPanel _recovery = new();
+    private readonly ComboBox _cameraType = new() { MinWidth = 190 };
+    private readonly TextBox _moduleFolder = new() { MinWidth = 260 };
+    private readonly TextBox _moduleFile = new() { MinWidth = 150 };
     private CancellationTokenSource? _operation;
     private int _attempts, _successes, _failures;
     private IReadOnlyList<SubjectRecord> _roster = Array.Empty<SubjectRecord>();
@@ -31,12 +35,7 @@ public sealed class MainWindow : Window
     {
         Title = "RoboCapture Camera Lab 0.2";
         Width = 900; Height = 650; MinWidth = 700; MinHeight = 500;
-        _camera.Event += cameraEvent => Dispatcher.InvokeAsync(async () =>
-        {
-            Log($"{cameraEvent.Operation}: {cameraEvent.Result}{Error(cameraEvent.Error)}");
-            try { await _store.RecordCameraEventAsync(cameraEvent); }
-            catch (Exception exception) { Log($"ERROR: event persistence failed: {exception.Message}"); }
-        });
+        WireCamera(new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 });
         Content = Layout();
         Loaded += async (_, _) =>
         {
@@ -52,6 +51,17 @@ public sealed class MainWindow : Window
         Closed += async (_, _) => await _camera.DisposeAsync();
     }
 
+    private void WireCamera(ICameraDriver camera)
+    {
+        _camera = camera;
+        _camera.Event += cameraEvent => Dispatcher.InvokeAsync(async () =>
+        {
+            Log($"{cameraEvent.Operation}: {cameraEvent.Result}{Error(cameraEvent.Error)}");
+            try { await _store.RecordCameraEventAsync(cameraEvent); }
+            catch (Exception exception) { Log($"ERROR: event persistence failed: {exception.Message}"); }
+        });
+    }
+
     private UIElement Layout()
     {
         var root = new DockPanel { Margin = new Thickness(16) };
@@ -59,6 +69,29 @@ public sealed class MainWindow : Window
         header.Children.Add(new TextBlock { Text = "CAMERA LAB 0.2", FontSize = 24, FontWeight = FontWeights.Bold });
         header.Children.Add(_cameraText); header.Children.Add(_statusText);
         DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
+
+        var driverRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        _cameraType.Items.Add("Simulator");
+        _cameraType.Items.Add("Nikon (Legacy MAID3)");
+        _cameraType.Items.Add("Nikon (Remote SDK v2)");
+        _cameraType.SelectedIndex = 0;
+        _cameraType.SelectionChanged += (_, _) => UpdateDriverFields();
+        driverRow.Children.Add(new Label { Content = "Driver" }); driverRow.Children.Add(_cameraType);
+        driverRow.Children.Add(new Label { Content = "Module folder" }); driverRow.Children.Add(_moduleFolder);
+        var browseButton = new Button { Content = "BROWSE...", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        browseButton.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Select the Nikon module folder" };
+            if (dialog.ShowDialog() == true) _moduleFolder.Text = dialog.FolderName;
+        };
+        driverRow.Children.Add(browseButton);
+        driverRow.Children.Add(new Label { Content = "Module file" }); driverRow.Children.Add(_moduleFile);
+        var switchButton = new Button { Content = "SWITCH CAMERA", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        switchButton.Click += async (_, _) => await SwitchCamera();
+        driverRow.Children.Add(switchButton);
+        DockPanel.SetDock(driverRow, Dock.Top); root.Children.Add(driverRow);
+        UpdateDriverFields();
+
         var buttons = new WrapPanel { Margin = new Thickness(0, 12, 0, 8) };
         Add(buttons, "CONNECT", Connect); Add(buttons, "DISCONNECT", Disconnect); Add(buttons, "CAPTURE", Capture);
         Add(buttons, "CAPTURE X N", CaptureMany); Add(buttons, "RUN STRESS TEST", Stress); Add(buttons, "STOP", Stop);
@@ -140,6 +173,47 @@ public sealed class MainWindow : Window
         }
     }
 
+    private void UpdateDriverFields()
+    {
+        var isNikon = _cameraType.SelectedIndex is 1 or 2;
+        _moduleFolder.IsEnabled = isNikon;
+        if (!isNikon) return;
+        _moduleFile.Text = _cameraType.SelectedIndex == 1 ? "Type0022.md3" : "ControlServiceLayer.dll";
+    }
+
+    private async Task SwitchCamera()
+    {
+        if (_operation is not null) { Log("ERROR: stop the current operation before switching cameras."); return; }
+        try
+        {
+            if (_camera.State != CameraConnectionState.Disconnected) await _camera.DisconnectAsync();
+        }
+        catch (Exception exception) { Log($"WARNING: error disconnecting previous camera: {exception.Message}"); }
+        await _camera.DisposeAsync();
+
+        ICameraDriver next;
+        try
+        {
+            next = _cameraType.SelectedIndex switch
+            {
+                1 => new NikonCameraDriver(_moduleFolder.Text, _moduleFile.Text),
+                2 => new NikonRemoteSdkV2CameraDriver(_moduleFolder.Text, _moduleFile.Text),
+                _ => new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 }
+            };
+        }
+        catch (Exception exception)
+        {
+            Log($"ERROR: could not create driver: {exception.Message}");
+            WireCamera(new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 });
+            _cameraType.SelectedIndex = 0;
+            UpdateCamera();
+            return;
+        }
+        WireCamera(next);
+        UpdateCamera();
+        Log($"Camera driver switched to: {_cameraType.SelectedItem}");
+    }
+
     private async Task Connect() { try { await _camera.ConnectAsync(); UpdateCamera(); Log("Connected."); } catch (Exception e) { Log($"ERROR: {e.Message}"); } }
     private async Task Disconnect() { await _camera.DisconnectAsync(); UpdateCamera(); Log("Disconnected."); }
     private Task Capture() => CaptureManyInternal(1);
@@ -185,10 +259,30 @@ public sealed class MainWindow : Window
     }
 
     private Task Stop() { _operation?.Cancel(); return Task.CompletedTask; }
-    private Task InjectDisconnect() { _camera.InjectDisconnect(); Log("Next capture will disconnect."); return Task.CompletedTask; }
-    private Task InjectCaptureFailure() { _camera.FailureRate = 1; _camera.TransferFailureRate = 0; Log("Capture failure injection enabled."); return Task.CompletedTask; }
-    private Task InjectTransferFailure() { _camera.TransferFailureRate = 1; _camera.FailureRate = 0; Log("Transfer failure injection enabled."); return Task.CompletedTask; }
-    private Task ClearFaults() { _camera.FailureRate = 0; _camera.TransferFailureRate = 0; Log("Failure injections cleared."); return Task.CompletedTask; }
+    private Task InjectDisconnect()
+    {
+        if (_camera is SimulatedCameraDriver sim) { sim.InjectDisconnect(); Log("Next capture will disconnect."); }
+        else Log("ERROR: fault injection is only available with the Simulator driver.");
+        return Task.CompletedTask;
+    }
+    private Task InjectCaptureFailure()
+    {
+        if (_camera is SimulatedCameraDriver sim) { sim.FailureRate = 1; sim.TransferFailureRate = 0; Log("Capture failure injection enabled."); }
+        else Log("ERROR: fault injection is only available with the Simulator driver.");
+        return Task.CompletedTask;
+    }
+    private Task InjectTransferFailure()
+    {
+        if (_camera is SimulatedCameraDriver sim) { sim.TransferFailureRate = 1; sim.FailureRate = 0; Log("Transfer failure injection enabled."); }
+        else Log("ERROR: fault injection is only available with the Simulator driver.");
+        return Task.CompletedTask;
+    }
+    private Task ClearFaults()
+    {
+        if (_camera is SimulatedCameraDriver sim) { sim.FailureRate = 0; sim.TransferFailureRate = 0; Log("Failure injections cleared."); }
+        else Log("ERROR: fault injection is only available with the Simulator driver.");
+        return Task.CompletedTask;
+    }
     private bool Connected() { if (_camera.State == CameraConnectionState.Connected) return true; Log("ERROR: connect the camera first."); return false; }
     private void UpdateCamera() { _statusText.Text = $"Connection: {_camera.State}"; _cameraText.Text = _camera.Info is null ? "Camera: unavailable" : $"Camera: {_camera.Info.Manufacturer} {_camera.Info.Model} | ID: {_camera.Info.SerialNumber} | Tier: {_camera.Info.CompatibilityTier} | Capabilities: {_camera.Info.Capabilities}"; }
     private void UpdateCounters() => _counters.Text = $"Attempts: {_attempts} | Successes: {_successes} | Failures: {_failures}";

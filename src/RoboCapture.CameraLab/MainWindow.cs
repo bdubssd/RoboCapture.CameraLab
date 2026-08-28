@@ -22,7 +22,7 @@ public sealed class MainWindow : Window
     private readonly TextBox _scanInput = new() { MinWidth = 180 };
     private readonly TextBox _count = new() { Text = "10", MinWidth = 50 };
     private readonly TextBox _interval = new() { Text = "0", MinWidth = 50 };
-    private readonly TextBox _log = new() { IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    private readonly TextBox _log = new() { IsReadOnly = true, AcceptsReturn = true, Height = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly TextBlock _rosterStatus = new() { Text = "Roster: none loaded (scans use raw value as subject ID)" };
     private readonly StackPanel _recovery = new();
     private readonly ComboBox _cameraType = new() { MinWidth = 190 };
@@ -86,15 +86,20 @@ public sealed class MainWindow : Window
         catch { /* skip a malformed frame rather than crash the UI thread */ }
     }
 
+    private static TextBlock SectionHeader(string text) =>
+        new() { Text = text, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 10, 0, 2) };
+
     private UIElement Layout()
     {
-        var root = new DockPanel { Margin = new Thickness(16) };
+        var root = new StackPanel { Margin = new Thickness(16) };
         var header = new StackPanel();
         header.Children.Add(new TextBlock { Text = "CAMERA LAB 0.2", FontSize = 24, FontWeight = FontWeights.Bold });
         header.Children.Add(_cameraText); header.Children.Add(_statusText);
-        DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
+        root.Children.Add(header);
 
-        var driverRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        // Step 1: pick a driver.
+        root.Children.Add(SectionHeader("1. CHOOSE CAMERA"));
+        var driverRow = new WrapPanel();
         _cameraType.Items.Add("Simulator");
         _cameraType.Items.Add("Nikon (Legacy MAID3)");
         _cameraType.Items.Add("Nikon (Remote SDK v2)");
@@ -110,21 +115,21 @@ public sealed class MainWindow : Window
         };
         driverRow.Children.Add(browseButton);
         driverRow.Children.Add(new Label { Content = "Module file" }); driverRow.Children.Add(_moduleFile);
-        var switchButton = new Button { Content = "SWITCH CAMERA", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        root.Children.Add(driverRow);
+        var switchButton = new Button { Content = "SWITCH CAMERA (apply the driver above)", Margin = new Thickness(2, 6, 2, 2), Padding = new Thickness(7, 4, 7, 4), FontWeight = FontWeights.Bold };
         switchButton.Click += async (_, _) => await SwitchCamera();
-        driverRow.Children.Add(switchButton);
-        DockPanel.SetDock(driverRow, Dock.Top); root.Children.Add(driverRow);
+        root.Children.Add(switchButton);
         UpdateDriverFields();
 
-        var buttons = new WrapPanel { Margin = new Thickness(0, 12, 0, 8) };
-        Add(buttons, "CONNECT", Connect); Add(buttons, "DISCONNECT", Disconnect); Add(buttons, "CAPTURE", Capture);
-        Add(buttons, "CAPTURE X N", CaptureMany); Add(buttons, "RUN STRESS TEST", Stress); Add(buttons, "STOP", Stop);
-        Add(buttons, "INJECT DISCONNECT", InjectDisconnect); Add(buttons, "INJECT CAPTURE FAILURE", InjectCaptureFailure);
-        Add(buttons, "INJECT TRANSFER FAILURE", InjectTransferFailure); Add(buttons, "CLEAR FAULTS", ClearFaults); Add(buttons, "RECONNECT", Connect);
-        Add(buttons, "LOAD ROSTER", LoadRoster);
-        Add(buttons, "LIVE VIEW ON", StartLiveView); Add(buttons, "LIVE VIEW OFF", StopLiveView);
-        root.Children.Add(buttons);
-        var inputs = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
+        // Step 2: connect.
+        root.Children.Add(SectionHeader("2. CONNECT"));
+        var connectRow = new WrapPanel();
+        Add(connectRow, "CONNECT", Connect); Add(connectRow, "DISCONNECT", Disconnect);
+        root.Children.Add(connectRow);
+
+        // Step 3: capture.
+        root.Children.Add(SectionHeader("3. CAPTURE"));
+        var inputs = new WrapPanel();
         inputs.Children.Add(new Label { Content = "Subject" }); inputs.Children.Add(_subject);
         inputs.Children.Add(new Label { Content = "QR/barcode scan" }); inputs.Children.Add(_scanInput);
         inputs.Children.Add(new Label { Content = "Count" }); inputs.Children.Add(_count);
@@ -152,10 +157,32 @@ public sealed class MainWindow : Window
             _scanInput.Clear();
         };
         root.Children.Add(inputs);
-        root.Children.Add(new StackPanel { Children = { _rosterStatus, _destination, _lastCapture, _counters, _recovery } });
+        var captureRow = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+        Add(captureRow, "CAPTURE", Capture); Add(captureRow, "CAPTURE X N", CaptureMany); Add(captureRow, "STOP", Stop);
+        Add(captureRow, "LIVE VIEW ON", StartLiveView); Add(captureRow, "LIVE VIEW OFF", StopLiveView);
+        root.Children.Add(captureRow);
+        root.Children.Add(new StackPanel { Children = { _destination, _lastCapture, _counters, _recovery } });
         root.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { _liveViewStatus } });
         root.Children.Add(_liveViewImage);
-        root.Children.Add(_log); return root;
+
+        // Roster (optional).
+        root.Children.Add(SectionHeader("ROSTER (optional)"));
+        var rosterRow = new WrapPanel();
+        Add(rosterRow, "LOAD ROSTER", LoadRoster);
+        root.Children.Add(rosterRow);
+        root.Children.Add(_rosterStatus);
+
+        // Simulator-only testing tools — no effect on real hardware.
+        root.Children.Add(SectionHeader("SIMULATOR TESTING (Simulator driver only)"));
+        var testRow = new WrapPanel();
+        Add(testRow, "RUN STRESS TEST", Stress);
+        Add(testRow, "INJECT DISCONNECT", InjectDisconnect); Add(testRow, "INJECT CAPTURE FAILURE", InjectCaptureFailure);
+        Add(testRow, "INJECT TRANSFER FAILURE", InjectTransferFailure); Add(testRow, "CLEAR FAULTS", ClearFaults);
+        root.Children.Add(testRow);
+
+        root.Children.Add(SectionHeader("LOG"));
+        root.Children.Add(_log);
+        return new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     }
 
     private static void Add(Panel panel, string text, Func<Task> action)

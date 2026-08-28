@@ -5,3 +5,5 @@
 *.suo
 *.db
 captures/*
+vendor-sdks/
+nikon-test-out.txt

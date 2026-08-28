@@ -1,16 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
-    <UseWPF>true</UseWPF>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RoboCapture.Core\RoboCapture.Core.csproj" />
-    <ProjectReference Include="..\RoboCapture.Persistence\RoboCapture.Persistence.csproj" />
-    <ProjectReference Include="..\RoboCapture.NikonAdapter\RoboCapture.NikonAdapter.csproj" />
   </ItemGroup>
 </Project>

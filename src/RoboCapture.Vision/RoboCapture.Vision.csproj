@@ -16,6 +16,8 @@
     <!-- Stock OpenCV Haar cascades (BSD-licensed, vendored from opencv/opencv's data/haarcascades)
          so the app never needs to fetch anything at runtime. Shipped alongside the assembly. -->
     <None Include="Cascades\*.xml" CopyToOutputDirectory="PreserveNewest" />
+    <!-- YuNet face detector (Apache-2.0, vendored from opencv/opencv_zoo), same reasoning. -->
+    <None Include="Models\*.onnx" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

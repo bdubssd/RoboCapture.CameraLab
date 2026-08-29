@@ -67,12 +67,26 @@ the quality check against each delivered JPEG afterward:
 | **OpenCV (via `OpenCvSharp4`) Haar/DNN face + eye cascades** | Very mature, well-documented, free, fully offline, no model-sourcing risk (ships with OpenCV). Cruder than a landmark model (eye "open/closed" via cascade presence is noisy) but enough for a first cut and fast to prototype. | Less accurate blink/smile detection than a landmark model; needs tuning per-camera/lighting. |
 | **ONNX face-analysis model run locally via `Microsoft.ML.OnnxRuntime`** | No cloud dependency, no per-shot cost, fully offline. A small face-landmark/blendshape model (e.g. MediaPipe FaceMesh exported to ONNX, or a blink/smile-specific classifier) gives eye-aspect-ratio (blink) and mouth-curvature (smile) signals directly from landmarks — meaningfully more accurate than cascades. | Have to find/vendor/license a model file and validate it against real faces under your studio lighting. |
 
-**Recommendation unchanged:** start with OpenCvSharp4 to get the pipeline
-(burst → per-frame detect → score → pick/flag) working and testable end to
-end, then swap in an ONNX landmark model for better blink/smile accuracy once
-the plumbing is proven. Cloud vision is off the table per the offline
-requirement, so it's dropped from the options entirely rather than listed as
-a fallback.
+**Update (2026-08-28):** built both. `OpenCvShotQualityFilter` (Haar cascades)
+was the first cut; testing it against a real camera JPEG with no person in
+frame produced a confirmed false positive (`face=True` on an empty studio
+shot). `YuNetShotQualityFilter` — OpenCV's own modern face detector
+(opencv/opencv_zoo, Apache-2.0, ~230KB ONNX file, vendored under `Models/`,
+fully offline) — was added on top and correctly reports no face on the same
+image. YuNet also returns 5-point landmarks (eyes, nose, mouth corners)
+directly, used for eyes-open (local contrast in a small crop around each eye
+point) and smile (mouth-corner separation) heuristics — cruder proxies than
+a full landmark model, but no second cascade scan needed. **YuNet is now the
+recommended default**; `OpenCvShotQualityFilter` stays in the codebase as a
+comparison baseline (the `--vision-test` CLI harness runs both side by side).
+Cloud vision is off the table per the offline requirement, dropped from the
+options entirely.
+
+Still unvalidated: neither filter has been run against an actual face yet —
+all testing so far is true-negative-only (confirms both correctly say "no
+face" on empty scenes). The eyes-open and smile heuristics in particular are
+unproven guesses at reasonable thresholds, not measured against real
+photos. That's still the next concrete step.
 
 ## QR-from-camera vs QR-from-scanner
 

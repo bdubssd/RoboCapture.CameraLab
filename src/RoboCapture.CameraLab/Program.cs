@@ -59,7 +59,8 @@ public static class Program
             return;
         }
 
-        using var filter = new OpenCvShotQualityFilter();
+        using var haarFilter = new OpenCvShotQualityFilter();
+        using var yunetFilter = new YuNetShotQualityFilter();
         var files = Directory.GetFiles(folder)
             .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
             .OrderBy(f => f, StringComparer.Ordinal)
@@ -70,15 +71,20 @@ public static class Program
             return;
         }
 
-        var passed = 0;
+        var haarPassed = 0;
+        var yunetPassed = 0;
         foreach (var file in files)
         {
-            var score = filter.Score(File.ReadAllBytes(file));
-            if (score.Pass) passed++;
-            Console.WriteLine($"{Path.GetFileName(file)}: face={score.FaceDetected} eyesOpen={score.EyesOpen} " +
-                $"smile={score.SmileDetected} PASS={score.Pass} — {score.Reason}");
+            var bytes = File.ReadAllBytes(file);
+            var haar = haarFilter.Score(bytes);
+            var yunet = yunetFilter.Score(bytes);
+            if (haar.Pass) haarPassed++;
+            if (yunet.Pass) yunetPassed++;
+            Console.WriteLine($"{Path.GetFileName(file)}");
+            Console.WriteLine($"  HAAR : face={haar.FaceDetected} eyesOpen={haar.EyesOpen} smile={haar.SmileDetected} PASS={haar.Pass} - {haar.Reason}");
+            Console.WriteLine($"  YUNET: face={yunet.FaceDetected} eyesOpen={yunet.EyesOpen} smile={yunet.SmileDetected} PASS={yunet.Pass} - {yunet.Reason}");
         }
-        Console.WriteLine($"SUMMARY: {passed}/{files.Count} passed");
+        Console.WriteLine($"SUMMARY: HAAR {haarPassed}/{files.Count} passed, YUNET {yunetPassed}/{files.Count} passed");
     }
 
     private static async Task RunNikonTestAsync(string[] args, string nikonTestArg)

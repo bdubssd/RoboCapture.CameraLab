@@ -82,11 +82,32 @@ comparison baseline (the `--vision-test` CLI harness runs both side by side).
 Cloud vision is off the table per the offline requirement, dropped from the
 options entirely.
 
-Still unvalidated: neither filter has been run against an actual face yet —
-all testing so far is true-negative-only (confirms both correctly say "no
-face" on empty scenes). The eyes-open and smile heuristics in particular are
-unproven guesses at reasonable thresholds, not measured against real
-photos. That's still the next concrete step.
+**Update (2026-08-28, later same day):** replaced both remaining heuristics
+with pretrained models too — every signal `YuNetShotQualityFilter` reports is
+now backed by a model or published method, not code we guessed:
+
+- **Smile**: Microsoft's FER+ emotion classifier (official ONNX Model Zoo,
+  `onnx/models`, MIT license) run via OpenCV's DNN module — a real 8-class
+  emotion classifier trained on labeled faces, not a mouth-width heuristic.
+- **Eyes-open**: dlib's pretrained 68-point facial landmark model
+  (`davisking/dlib-models`, free for any use) plus the Eye Aspect Ratio
+  method (Soukupová & Čech, 2016) — the standard published blink-detection
+  technique, not a contrast-based guess.
+- **Face**: YuNet, unchanged from the earlier update.
+
+All three model files (~130MB total, mostly the dlib landmark model) are
+vendored under `src/RoboCapture.Vision/Models/` and committed to the repo —
+worth knowing given the size, but necessary for the app to run with zero
+setup on an offline machine.
+
+Still unvalidated: **no filter has been run against an actual face yet** —
+every test so far is true-negative-only (confirms all three correctly say
+"no face" on empty scenes, and the pipeline loads/runs without crashing).
+Being pretrained means each signal is *individually* credible (validated by
+its original authors on real datasets), not that the combination is
+calibrated for this studio's camera, lighting, and angles — real sample
+photos are still the next concrete step to see actual pass/fail behavior
+and, if needed, tune the EAR and happiness-probability thresholds.
 
 ## QR-from-camera vs QR-from-scanner
 

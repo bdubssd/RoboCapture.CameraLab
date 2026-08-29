@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="DlibDotNet" Version="19.21.0.20220724" />
     <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
   </ItemGroup>
@@ -16,8 +17,12 @@
     <!-- Stock OpenCV Haar cascades (BSD-licensed, vendored from opencv/opencv's data/haarcascades)
          so the app never needs to fetch anything at runtime. Shipped alongside the assembly. -->
     <None Include="Cascades\*.xml" CopyToOutputDirectory="PreserveNewest" />
-    <!-- YuNet face detector (Apache-2.0, vendored from opencv/opencv_zoo), same reasoning. -->
+    <!-- Pretrained models, same reasoning: YuNet face detector (Apache-2.0, from
+         opencv/opencv_zoo), Microsoft's FER+ emotion classifier (MIT, from the official ONNX
+         Model Zoo, onnx/models), and dlib's 68-point facial landmark model (free for any use,
+         from davisking/dlib-models). -->
     <None Include="Models\*.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Models\*.dat" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

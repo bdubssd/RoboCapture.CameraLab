@@ -117,6 +117,26 @@ into the UI/capture flow) can proceed without real photos — that's
 plumbing, not calibration, and is useful groundwork regardless of what the
 eventual thresholds turn out to be.
 
+**Step 4 done (2026-08-29):** the quality filter is now wired into the live
+capture flow, not just the offline `--vision-test` harness. `MainWindow`
+has a "Score captures for quality" checkbox (on by default); after each
+successful capture with a JPEG delivered, `YuNetShotQualityFilter` scores it
+off the UI thread, the verdict is written to a new `QualityPass`/
+`QualityReason` pair of columns on the `Captures` table (via
+`CaptureStore.RecordShotQualityAsync`, migrated in for existing databases),
+and a running "N of M kept" summary shows in the UI. RAW-only captures are
+silently skipped (nothing to decode); scoring failures are logged as
+warnings and never abort a capture. Verified live: connect → capture →
+scoring ran, updated the DB, and updated the UI summary with no exceptions
+— the Z6III wasn't reachable at test time (asleep/disconnected) so this ran
+against the Simulator's placeholder JPG, which correctly failed to decode
+(not a real image) — that's the scoring path working as intended, not a
+bug, but it means this still hasn't scored a real captured photo end to end
+through the live UI (only through the offline `--vision-test` harness, and
+even there only against face-less studio shots). Step 3 (formalizing
+`PoseStep`-style programmable bursts beyond today's simple Count+Interval
+fields) is still open.
+
 ## QR-from-camera vs QR-from-scanner
 
 The wedge-scanner path (`SubjectIdentifier.Resolve`, wired to the scan

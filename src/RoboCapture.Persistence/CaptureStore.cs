@@ -18,7 +18,7 @@ public sealed class CaptureStore(string databasePath) : ICaptureRecorder
         command.CommandText = """
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS Sessions (Id TEXT PRIMARY KEY, SubjectId TEXT NOT NULL, StartedUtc TEXT NOT NULL, CompletedUtc TEXT NULL);
-            CREATE TABLE IF NOT EXISTS Captures (Id INTEGER PRIMARY KEY AUTOINCREMENT, SessionId TEXT NOT NULL, SubjectId TEXT NOT NULL, PoseId TEXT NOT NULL, ShotNumber INTEGER NOT NULL, State TEXT NOT NULL, CameraFileName TEXT NULL, LocalPath TEXT NULL, Error TEXT NULL, TimestampUtc TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS Captures (Id INTEGER PRIMARY KEY AUTOINCREMENT, SessionId TEXT NOT NULL, SubjectId TEXT NOT NULL, PoseId TEXT NOT NULL, ShotNumber INTEGER NOT NULL, State TEXT NOT NULL, CameraFileName TEXT NULL, LocalPath TEXT NULL, Error TEXT NULL, TimestampUtc TEXT NOT NULL, QualityPass INTEGER NULL, QualityReason TEXT NULL);
             CREATE TABLE IF NOT EXISTS ErrorLog (Id INTEGER PRIMARY KEY AUTOINCREMENT, TimestampUtc TEXT NOT NULL, Operation TEXT NOT NULL, Error TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS Events (Id TEXT PRIMARY KEY, Name TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS Subjects (Id TEXT PRIMARY KEY, EventId TEXT NULL, StudentId TEXT NULL, FirstName TEXT NULL, LastName TEXT NULL, CustomFieldsJson TEXT NULL);
@@ -30,6 +30,36 @@ public sealed class CaptureStore(string databasePath) : ICaptureRecorder
             CREATE TABLE IF NOT EXISTS AuditLog (Id INTEGER PRIMARY KEY AUTOINCREMENT, TimestampUtc TEXT NOT NULL, Operation TEXT NOT NULL, Details TEXT NOT NULL);
             """;
         await command.ExecuteNonQueryAsync(ct);
+        await MigrateAsync(connection, ct);
+    }
+
+    /// <summary>
+    /// CREATE TABLE IF NOT EXISTS above only helps a brand-new database — a Captures table from
+    /// before QualityPass/QualityReason existed needs an explicit ALTER TABLE to pick them up.
+    /// SQLite has no "ADD COLUMN IF NOT EXISTS", so check PRAGMA table_info first.
+    /// </summary>
+    private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA table_info(Captures)";
+            await using var reader = await pragma.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) existingColumns.Add(reader.GetString(1));
+        }
+
+        if (!existingColumns.Contains("QualityPass"))
+        {
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE Captures ADD COLUMN QualityPass INTEGER NULL";
+            await alter.ExecuteNonQueryAsync(ct);
+        }
+        if (!existingColumns.Contains("QualityReason"))
+        {
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE Captures ADD COLUMN QualityReason TEXT NULL";
+            await alter.ExecuteNonQueryAsync(ct);
+        }
     }
 
     public async Task StartSessionAsync(string sessionId, string subjectId, CancellationToken ct = default) =>
@@ -45,6 +75,18 @@ public sealed class CaptureStore(string databasePath) : ICaptureRecorder
     public async Task CompleteSessionAsync(string sessionId, CancellationToken ct = default) =>
         await ExecuteAsync("UPDATE Sessions SET CompletedUtc = $completed WHERE Id = $id", ct,
             ("$id", sessionId), ("$completed", DateTimeOffset.UtcNow.ToString("O")));
+
+    /// <summary>
+    /// Attaches a shot-quality-filter verdict to an already-recorded capture, identified by the
+    /// same (session, pose, shot) triple <see cref="RecordCaptureAsync"/> was called with.
+    /// Deliberately not part of <see cref="ICaptureRecorder"/> — that interface (and
+    /// <c>PoseEngine</c>) knows nothing about vision/quality scoring, keeping this an add-on a
+    /// caller opts into rather than a required part of the recording contract.
+    /// </summary>
+    public async Task RecordShotQualityAsync(string sessionId, string poseId, int shotNumber, bool pass, string reason, CancellationToken ct = default) =>
+        await ExecuteAsync(
+            "UPDATE Captures SET QualityPass = $pass, QualityReason = $reason WHERE SessionId = $session AND PoseId = $pose AND ShotNumber = $shot", ct,
+            ("$pass", pass ? 1 : 0), ("$reason", reason), ("$session", sessionId), ("$pose", poseId), ("$shot", shotNumber));
 
     public async Task<IReadOnlyList<string>> GetIncompleteSessionIdsAsync(CancellationToken ct = default)
     {

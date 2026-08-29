@@ -6,6 +6,7 @@ using System.Windows.Media.Imaging;
 using RoboCapture.Core;
 using RoboCapture.NikonAdapter;
 using RoboCapture.Persistence;
+using RoboCapture.Vision;
 
 namespace RoboCapture.CameraLab;
 
@@ -48,8 +49,12 @@ public sealed class MainWindow : Window
     private readonly TextBox _saveFolder = new() { Text = Path.Combine(Environment.CurrentDirectory, "captures"), MinWidth = 320 };
     private readonly ComboBox _imageFormat = new() { MinWidth = 140 };
     private readonly TextBlock _formatStatus = new() { Text = "Format: not applied (Nikon Remote SDK v2 only)" };
+    private readonly CheckBox _qualityEnabled = new() { Content = "Score captures for quality (blink/smile) - experimental, unvalidated thresholds", IsChecked = true, Margin = new Thickness(0, 4, 0, 0) };
+    private readonly TextBlock _qualitySummary = new() { Text = "Quality: n/a" };
+    private YuNetShotQualityFilter? _qualityFilter;
     private CancellationTokenSource? _operation;
     private int _attempts, _successes, _failures;
+    private int _qualityScored, _qualityKept;
     private IReadOnlyList<SubjectRecord> _roster = Array.Empty<SubjectRecord>();
     private SubjectIdentifier? _identifier;
 
@@ -71,7 +76,7 @@ public sealed class MainWindow : Window
             catch (Exception exception) { Log($"ERROR: database initialization failed: {exception.Message}"); }
             DetectCamera();
         };
-        Closed += async (_, _) => await _camera.DisposeAsync();
+        Closed += async (_, _) => { await _camera.DisposeAsync(); _qualityFilter?.Dispose(); };
     }
 
     private void WireCamera(ICameraDriver camera)
@@ -137,6 +142,38 @@ public sealed class MainWindow : Window
         {
             _lastCapturePreviewStatus.Text = $"Last capture preview: failed to load ({exception.Message})";
             _lastCaptureImage.Source = null;
+        }
+    }
+
+    /// <summary>
+    /// Runs the (unvalidated — see docs/AUTONOMOUS_CAPTURE_PLAN.md) shot-quality filter against
+    /// a successful capture's delivered JPEG, records the verdict against that capture's DB row,
+    /// and updates the running kept/flagged summary. Silently skipped for RAW-only captures
+    /// (nothing to decode) and for failed captures; scoring failures are logged but never abort
+    /// the capture loop — this is a best-effort add-on, not a required part of capturing.
+    /// </summary>
+    private async Task ScoreCaptureIfEnabledAsync(string sessionId, CaptureRequest request, CaptureResult result, CancellationToken ct)
+    {
+        if (_qualityEnabled.IsChecked != true || !result.Success || string.IsNullOrEmpty(result.LocalPath)) return;
+        var extension = Path.GetExtension(result.LocalPath);
+        if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+            return; // RAW-only capture — nothing this filter can decode.
+
+        try
+        {
+            var filter = _qualityFilter ??= new YuNetShotQualityFilter();
+            var bytes = await File.ReadAllBytesAsync(result.LocalPath, ct);
+            var score = await Task.Run(() => filter.Score(bytes), ct);
+
+            await _store.RecordShotQualityAsync(sessionId, request.PoseId, request.ShotNumber, score.Pass, score.Reason, ct);
+            _qualityScored++;
+            if (score.Pass) _qualityKept++;
+            _qualitySummary.Text = $"Quality: {_qualityKept}/{_qualityScored} kept — last shot {(score.Pass ? "KEPT" : "FLAGGED")}: {score.Reason}";
+            Log($"Quality check: {(score.Pass ? "KEPT" : "FLAGGED")} — {score.Reason}");
+        }
+        catch (Exception exception)
+        {
+            Log($"WARNING: quality scoring failed: {exception.Message}");
         }
     }
 
@@ -216,6 +253,7 @@ public sealed class MainWindow : Window
 
         // Step 3: capture.
         root.Children.Add(SectionHeader("3. CAPTURE"));
+        root.Children.Add(_qualityEnabled);
         var inputs = new WrapPanel();
         inputs.Children.Add(new Label { Content = "Subject" }); inputs.Children.Add(_subject);
         inputs.Children.Add(new Label { Content = "QR/barcode scan" }); inputs.Children.Add(_scanInput);
@@ -248,7 +286,7 @@ public sealed class MainWindow : Window
         Add(captureRow, "CAPTURE", Capture); Add(captureRow, "CAPTURE X N", CaptureMany); Add(captureRow, "STOP", Stop);
         Add(captureRow, "LIVE VIEW ON", StartLiveView); Add(captureRow, "LIVE VIEW OFF", StopLiveView);
         root.Children.Add(captureRow);
-        root.Children.Add(new StackPanel { Children = { _destination, _lastCapture, _counters, _recovery } });
+        root.Children.Add(new StackPanel { Children = { _destination, _lastCapture, _counters, _qualitySummary, _recovery } });
         var previewRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         var liveViewPanel = new StackPanel { Margin = new Thickness(0, 0, 16, 0) };
         liveViewPanel.Children.Add(SectionHeader("LIVE VIEW"));
@@ -513,6 +551,7 @@ public sealed class MainWindow : Window
                 _destination.Text = $"Destination: {request.DestinationFolder}";
                 _lastCapture.Text = $"Last capture: {result.State} | {result.LocalPath ?? result.Error} | capture={result.CaptureDuration?.TotalMilliseconds:0}ms transfer={result.TransferDuration?.TotalMilliseconds:0}ms"; UpdateCounters();
                 UpdateLastCapturePreview(result);
+                await ScoreCaptureIfEnabledAsync(sessionId, request, result, _operation.Token);
                 if (int.TryParse(_interval.Text, out var interval) && interval > 0 && shot < count) await Task.Delay(interval, _operation.Token);
             }
             await _store.CompleteSessionAsync(sessionId, _operation.Token);

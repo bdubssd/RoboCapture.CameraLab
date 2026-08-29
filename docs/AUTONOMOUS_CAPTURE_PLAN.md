@@ -109,6 +109,14 @@ calibrated for this studio's camera, lighting, and angles — real sample
 photos are still the next concrete step to see actual pass/fail behavior
 and, if needed, tune the EAR and happiness-probability thresholds.
 
+**Deliberately deferred (2026-08-28):** the user has confirmed that
+real-photo validation/threshold-tuning ("training") happens later, not now.
+Don't ask for sample photos again until the user raises it. In the
+meantime, steps 3-4 below (wiring the programmable burst and the filter
+into the UI/capture flow) can proceed without real photos — that's
+plumbing, not calibration, and is useful groundwork regardless of what the
+eventual thresholds turn out to be.
+
 ## QR-from-camera vs QR-from-scanner
 
 The wedge-scanner path (`SubjectIdentifier.Resolve`, wired to the scan

@@ -41,8 +41,10 @@ public sealed class MainWindow : Window
     private readonly TextBox _moduleFolder = new() { MinWidth = 260 };
     private readonly TextBox _moduleFile = new() { MinWidth = 150 };
     private readonly TextBlock _detectStatus = new() { Text = "Camera detection: not run yet", Margin = new Thickness(0, 4, 0, 0) };
-    private readonly Image _liveViewImage = new() { Width = 480, Height = 320, Stretch = Stretch.Uniform, Margin = new Thickness(0, 8, 0, 8) };
+    private readonly Image _liveViewImage = new() { Width = 400, Height = 267, Stretch = Stretch.Uniform, Margin = new Thickness(0, 4, 0, 0) };
     private readonly TextBlock _liveViewStatus = new() { Text = "Live view: off" };
+    private readonly Image _lastCaptureImage = new() { Width = 400, Height = 267, Stretch = Stretch.Uniform, Margin = new Thickness(0, 4, 0, 0) };
+    private readonly TextBlock _lastCapturePreviewStatus = new() { Text = "Last capture preview: none yet" };
     private readonly TextBox _saveFolder = new() { Text = Path.Combine(Environment.CurrentDirectory, "captures"), MinWidth = 320 };
     private readonly ComboBox _imageFormat = new() { MinWidth = 140 };
     private readonly TextBlock _formatStatus = new() { Text = "Format: not applied (Nikon Remote SDK v2 only)" };
@@ -83,6 +85,8 @@ public sealed class MainWindow : Window
         });
         _liveViewImage.Source = null;
         _liveViewStatus.Text = "Live view: off";
+        _lastCaptureImage.Source = null;
+        _lastCapturePreviewStatus.Text = "Last capture preview: none yet";
         if (camera is NikonRemoteSdkV2CameraDriver nikon)
             nikon.LiveViewFrame += frame => Dispatcher.InvokeAsync(() => UpdateLiveViewImage(frame));
     }
@@ -101,6 +105,39 @@ public sealed class MainWindow : Window
             _liveViewImage.Source = bitmap;
         }
         catch { /* skip a malformed frame rather than crash the UI thread */ }
+    }
+
+    private void UpdateLastCapturePreview(CaptureResult result)
+    {
+        if (!result.Success || string.IsNullOrEmpty(result.LocalPath))
+        {
+            _lastCapturePreviewStatus.Text = "Last capture preview: none (capture failed)";
+            _lastCaptureImage.Source = null;
+            return;
+        }
+        var extension = Path.GetExtension(result.LocalPath);
+        if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            _lastCapturePreviewStatus.Text = $"Last capture preview: no preview for {extension} — {Path.GetFileName(result.LocalPath)}";
+            _lastCaptureImage.Source = null;
+            return;
+        }
+        try
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(result.LocalPath, UriKind.Absolute);
+            bitmap.EndInit();
+            bitmap.Freeze();
+            _lastCaptureImage.Source = bitmap;
+            _lastCapturePreviewStatus.Text = $"Last capture preview: {Path.GetFileName(result.LocalPath)}";
+        }
+        catch (Exception exception)
+        {
+            _lastCapturePreviewStatus.Text = $"Last capture preview: failed to load ({exception.Message})";
+            _lastCaptureImage.Source = null;
+        }
     }
 
     private static TextBlock SectionHeader(string text) =>
@@ -212,8 +249,18 @@ public sealed class MainWindow : Window
         Add(captureRow, "LIVE VIEW ON", StartLiveView); Add(captureRow, "LIVE VIEW OFF", StopLiveView);
         root.Children.Add(captureRow);
         root.Children.Add(new StackPanel { Children = { _destination, _lastCapture, _counters, _recovery } });
-        root.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { _liveViewStatus } });
-        root.Children.Add(_liveViewImage);
+        var previewRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var liveViewPanel = new StackPanel { Margin = new Thickness(0, 0, 16, 0) };
+        liveViewPanel.Children.Add(SectionHeader("LIVE VIEW"));
+        liveViewPanel.Children.Add(_liveViewStatus);
+        liveViewPanel.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Child = _liveViewImage });
+        previewRow.Children.Add(liveViewPanel);
+        var lastCapturePanel = new StackPanel();
+        lastCapturePanel.Children.Add(SectionHeader("LAST CAPTURE"));
+        lastCapturePanel.Children.Add(_lastCapturePreviewStatus);
+        lastCapturePanel.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Child = _lastCaptureImage });
+        previewRow.Children.Add(lastCapturePanel);
+        root.Children.Add(previewRow);
 
         // Roster (optional).
         root.Children.Add(SectionHeader("ROSTER (optional)"));
@@ -460,6 +507,7 @@ public sealed class MainWindow : Window
                 if (result.Success) _successes++; else _failures++;
                 _destination.Text = $"Destination: {request.DestinationFolder}";
                 _lastCapture.Text = $"Last capture: {result.State} | {result.LocalPath ?? result.Error} | capture={result.CaptureDuration?.TotalMilliseconds:0}ms transfer={result.TransferDuration?.TotalMilliseconds:0}ms"; UpdateCounters();
+                UpdateLastCapturePreview(result);
                 if (int.TryParse(_interval.Text, out var interval) && interval > 0 && shot < count) await Task.Delay(interval, _operation.Token);
             }
             await _store.CompleteSessionAsync(sessionId, _operation.Token);

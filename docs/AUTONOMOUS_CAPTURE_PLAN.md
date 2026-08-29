@@ -133,9 +133,15 @@ against the Simulator's placeholder JPG, which correctly failed to decode
 (not a real image) — that's the scoring path working as intended, not a
 bug, but it means this still hasn't scored a real captured photo end to end
 through the live UI (only through the offline `--vision-test` harness, and
-even there only against face-less studio shots). Step 3 (formalizing
-`PoseStep`-style programmable bursts beyond today's simple Count+Interval
-fields) is still open.
+even there only against face-less studio shots).
+
+**Step 3 closed, simple (2026-08-29):** user said keep it simple — no
+separate multi-pose `PoseProgram` editor. The existing `Count` + `Interval
+ms` fields already are the programmable burst ("N shots, fixed interval"),
+now with quality scoring running on every shot in that burst per step 4.
+`PoseEngine`/`PoseStep` stay as unused-by-MainWindow code for a possible
+future multi-pose feature, but building that UI is explicitly out of scope
+unless the user asks for it later.
 
 ## QR-from-camera vs QR-from-scanner
 
@@ -158,11 +164,10 @@ cloud dependency, so it fits the offline requirement cleanly.
    eyes-open/smile/framing booleans plus an overall pass/fail and a reason
    string — pure function over image bytes, no camera dependency, so it's
    unit-testable against a fixture folder of sample images.
-3. **Wire the programmable burst into the UI**: `PoseStep.Shots`/
-   `ShotInterval` already model "N shots, fixed interval" — MainWindow needs
-   controls to set them per session (today `CAPTURE X N` + `Interval ms`
-   already cover the simple case; formalizing this as a `PoseProgram` in the
-   UI is the main gap).
+3. ~~Wire the programmable burst into the UI~~ — closed as already-simple:
+   today's `CAPTURE X N` + `Interval ms` fields are the programmable burst.
+   No separate `PoseProgram`/multi-pose UI, per the user's "keep it simple"
+   call.
 4. **Wire the filter into `PoseEngine`/`MainWindow` after each burst**: score
    every delivered file for the pose, mark each as kept/flagged in the
    capture DB (`RoboCapture.Persistence`), and surface a simple "N of M kept"

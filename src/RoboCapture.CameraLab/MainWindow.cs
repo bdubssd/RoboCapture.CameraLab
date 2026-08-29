@@ -442,6 +442,11 @@ public sealed class MainWindow : Window
 
     private async Task Connect()
     {
+        if (_camera.State == CameraConnectionState.Connected)
+        {
+            Log("Already connected.");
+            return;
+        }
         if (_activeSelectionIndex != _cameraType.SelectedIndex)
         {
             Log($"Applying camera selection ({_cameraType.SelectedItem}) before connecting...");

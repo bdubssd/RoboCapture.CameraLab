@@ -100,6 +100,21 @@ Fixed by splitting initialization from device connection:
 Verified live: three Connect → Disconnect → Connect cycles in one process, zero `-117` errors,
 each ending in a genuinely connected state with `Info` populated correctly.
 
+## Hardening: EnumDevices retry + idempotent Connect
+
+Two small reliability fixes, both verified live against the Z6III:
+
+- `ConnectDeviceCore` now retries `EnumDevices` up to 3 times (1.5s apart) if it comes back with
+  zero elements, instead of failing on the first empty result. A camera that was just woken
+  (half shutter-press) or just plugged in can take a moment before PTP is actually ready even
+  though Windows already lists the USB device — this gives it that moment instead of making the
+  user click Connect again themselves.
+- `MainWindow.Connect()` is now a no-op (logs "Already connected.") if the camera is already
+  connected, rather than re-running `ConnectDeviceCore` and hitting a spurious "camera is listed
+  but not available for connection" error — that error is a real path when `ConnectDevice` is
+  called a second time for a device this same session already holds. Whatever the source of a
+  duplicate Connect trigger, this makes it a harmless no-op instead of a scary log line.
+
 ## Known limitation: Z-series repeat-capture download
 
 **Symptom:** `NikonRemoteSdkV2CameraDriver.CaptureAsync` reliably shoots and downloads on the

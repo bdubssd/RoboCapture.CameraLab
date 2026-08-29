@@ -212,18 +212,33 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
         finally { Marshal.FreeHGlobal(callbackPtr); }
     }
 
+    private static readonly TimeSpan EnumDevicesRetryDelay = TimeSpan.FromSeconds(1.5);
+    private const int EnumDevicesAttempts = 3;
+
     private void ConnectDeviceCore()
     {
         // EnumDevices (not InitializeSDK) is the SDK's documented way to refresh the device
         // list on an already-initialized session — this picks up a camera that was powered on
         // or woken after this driver's SDK session started, without touching the parts of the
         // SDK that don't tolerate being re-entered.
-        var enumResult = _enumDevices!(out var deviceListPtr, IntPtr.Zero, IntPtr.Zero);
-        if (enumResult != 0)
-            throw new InvalidOperationException($"Failed to query Nikon camera list (result {enumResult}).");
-        if (deviceListPtr == IntPtr.Zero)
-            throw new InvalidOperationException("Nikon Remote SDK returned no device list.");
-        var deviceList = Marshal.PtrToStructure<NkMaidEnumDevices>(deviceListPtr);
+        //
+        // A camera that was just woken (half shutter-press after auto power-off, or plugged in
+        // moments ago) can take a beat before PTP/USB communication is actually ready even
+        // though Windows already shows the device — the first EnumDevices right after that can
+        // legitimately come back empty. Retry a few times with a short delay before giving up,
+        // rather than making the user click Connect again themselves.
+        NkMaidEnumDevices deviceList = default;
+        for (var attempt = 1; attempt <= EnumDevicesAttempts; attempt++)
+        {
+            var enumResult = _enumDevices!(out var deviceListPtr, IntPtr.Zero, IntPtr.Zero);
+            if (enumResult != 0)
+                throw new InvalidOperationException($"Failed to query Nikon camera list (result {enumResult}).");
+            if (deviceListPtr == IntPtr.Zero)
+                throw new InvalidOperationException("Nikon Remote SDK returned no device list.");
+            deviceList = Marshal.PtrToStructure<NkMaidEnumDevices>(deviceListPtr);
+            if (deviceList.Elements > 0) break;
+            if (attempt < EnumDevicesAttempts) Thread.Sleep(EnumDevicesRetryDelay);
+        }
         if (deviceList.Elements == 0)
             throw new InvalidOperationException(
                 "No Nikon camera detected. Check the USB connection, that the camera is powered on, and " +

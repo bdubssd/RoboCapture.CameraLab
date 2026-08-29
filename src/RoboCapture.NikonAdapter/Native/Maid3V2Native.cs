@@ -107,6 +107,14 @@ internal static class Maid3V2
     internal const uint SaveMediaSdram = 1;
     internal const uint SaveMediaCardAndSdram = 2;
 
+    // kNkMAIDCapability_CompressionLevel (0x8110): the camera's image quality/RAW mode.
+    // Full eCompressionLevel enum has Basic/Normal/Fine x HighQuality variants for both JPEG
+    // and RAW+JPEG; these three are the ones exposed in the UI (Fine quality in both cases).
+    internal const uint CapCompressionLevel = 0x8110;
+    internal const uint CompressionLevelJpegFine = 4;
+    internal const uint CompressionLevelRaw = 6;
+    internal const uint CompressionLevelRawJpegFine = 11;
+
     // Byte offset of NkMAIDLiveViewData.pImageData, computed by hand from tagLiveViewHeader's
     // field list in Maid3.h (884 bytes under #pragma pack(2)) plus the three fields preceding
     // it (ulLvImageSize:4, wPhysicalBytes:2, wLogicalBits:2). Not represented as a full C#

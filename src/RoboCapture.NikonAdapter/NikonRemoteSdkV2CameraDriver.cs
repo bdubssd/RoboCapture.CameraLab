@@ -5,6 +5,9 @@ using RoboCapture.NikonAdapter.Native;
 
 namespace RoboCapture.NikonAdapter;
 
+/// <summary>Capture format: JPEG only, RAW only, or both together (RAW+JPEG).</summary>
+public enum ImageFormat { Jpeg, Raw, RawAndJpeg }
+
 /// <summary>
 /// ICameraDriver implementation over Nikon's "Remote SDK v2" simplified API
 /// (ControlServiceLayer.dll, the unified module covering current Z-series bodies).
@@ -280,16 +283,33 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
         Info = null;
     }
 
-    private void SetSaveMedia(uint value)
+    private void SetSaveMedia(uint value) => SetUnsignedCapability(Maid3V2.CapSaveMedia, value);
+
+    private void SetUnsignedCapability(uint capabilityId, uint value)
     {
-        var saveMediaPtr = Marshal.AllocHGlobal(sizeof(uint));
+        var valuePtr = Marshal.AllocHGlobal(sizeof(uint));
         try
         {
-            Marshal.WriteInt32(saveMediaPtr, (int)value);
-            _setCapability!(Maid3V2.CapSaveMedia, saveMediaPtr, Maid3.DataTypeUnsignedPtr);
+            Marshal.WriteInt32(valuePtr, (int)value);
+            _setCapability!(capabilityId, valuePtr, Maid3.DataTypeUnsignedPtr);
         }
-        finally { Marshal.FreeHGlobal(saveMediaPtr); }
+        finally { Marshal.FreeHGlobal(valuePtr); }
     }
+
+    /// <summary>Sets JPEG/RAW/RAW+JPEG capture mode. Safe to call whether or not the camera is
+    /// currently connected — if not connected, throws.</summary>
+    public Task SetImageFormatAsync(ImageFormat format) => RunOnWorkerAsync(() =>
+    {
+        if (State != CameraConnectionState.Connected || _setCapability is null)
+            throw new InvalidOperationException("Camera is not connected.");
+        var value = format switch
+        {
+            ImageFormat.Raw => Maid3V2.CompressionLevelRaw,
+            ImageFormat.RawAndJpeg => Maid3V2.CompressionLevelRawJpegFine,
+            _ => Maid3V2.CompressionLevelJpegFine
+        };
+        SetUnsignedCapability(Maid3V2.CapCompressionLevel, value);
+    });
 
     private void Disconnect()
     {
@@ -334,34 +354,56 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
                 return Failed($"Shooting command failed (result {shootResult}).", captureStarted);
 
             var transferStarted = DateTimeOffset.UtcNow;
-            string? capturedFile = null;
+            var files = Array.Empty<string>();
             var deadline = DateTime.UtcNow + TransferTimeout;
-            while (capturedFile is null && DateTime.UtcNow < deadline)
+            while (files.Length == 0 && DateTime.UtcNow < deadline)
             {
-                var files = Directory.GetFiles(stagingFolder);
-                if (files.Length > 0)
-                {
-                    capturedFile = files.OrderByDescending(File.GetLastWriteTimeUtc).First();
-                    break;
-                }
-                Thread.Sleep(50);
+                files = Directory.GetFiles(stagingFolder);
+                if (files.Length == 0) Thread.Sleep(50);
             }
 
-            if (capturedFile is null)
+            if (files.Length == 0)
                 return new CaptureResult(false, null, null, DateTimeOffset.UtcNow,
                     "No image file appeared after shooting. See docs/NIKON_SDK_NOTES.md — this camera/SDK combination " +
                     "only downloads the first shot per power-cycle; power-cycle the camera and reconnect to retry.",
                     CaptureLifecycleState.ExposureCompleted,
                     DateTimeOffset.UtcNow - captureStarted, DateTimeOffset.UtcNow - transferStarted);
 
-            var cameraFileName = Path.GetFileName(capturedFile);
+            // RAW+JPEG mode delivers two files per shot. Wait for the file count in the staging
+            // folder to stop growing (a short quiet period) before finalizing, so the second file
+            // isn't left behind.
+            var quietDeadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(800);
+            var lastCount = files.Length;
+            while (DateTime.UtcNow < quietDeadline)
+            {
+                Thread.Sleep(150);
+                files = Directory.GetFiles(stagingFolder);
+                if (files.Length != lastCount)
+                {
+                    lastCount = files.Length;
+                    quietDeadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(800);
+                }
+            }
+
             var safeSubject = string.Concat(request.SubjectId.Select(ch =>
                 char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_'));
-            var localName = $"{safeSubject}_{request.PoseId}_{request.ShotNumber:00}_{cameraFileName}";
-            var path = Path.Combine(request.DestinationFolder, localName);
-            File.Move(capturedFile, path, overwrite: true);
+            var movedPaths = new List<string>();
+            foreach (var file in files.OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var cameraFileName = Path.GetFileName(file);
+                var localName = $"{safeSubject}_{request.PoseId}_{request.ShotNumber:00}_{cameraFileName}";
+                var destPath = Path.Combine(request.DestinationFolder, localName);
+                File.Move(file, destPath, overwrite: true);
+                movedPaths.Add(destPath);
+            }
 
-            return new CaptureResult(true, cameraFileName, path, DateTimeOffset.UtcNow, null,
+            // Report the JPEG as the primary path when both were delivered; the RAW file (if
+            // any) still lands alongside it in the destination folder.
+            var primaryPath = movedPaths.FirstOrDefault(p =>
+                p.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
+                ?? movedPaths[0];
+
+            return new CaptureResult(true, Path.GetFileName(primaryPath), primaryPath, DateTimeOffset.UtcNow, null,
                 CaptureLifecycleState.Committed, DateTimeOffset.UtcNow - captureStarted,
                 DateTimeOffset.UtcNow - transferStarted);
         }

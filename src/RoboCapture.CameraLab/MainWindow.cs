@@ -43,6 +43,9 @@ public sealed class MainWindow : Window
     private readonly TextBlock _detectStatus = new() { Text = "Camera detection: not run yet", Margin = new Thickness(0, 4, 0, 0) };
     private readonly Image _liveViewImage = new() { Width = 480, Height = 320, Stretch = Stretch.Uniform, Margin = new Thickness(0, 8, 0, 8) };
     private readonly TextBlock _liveViewStatus = new() { Text = "Live view: off" };
+    private readonly TextBox _saveFolder = new() { Text = Path.Combine(Environment.CurrentDirectory, "captures"), MinWidth = 320 };
+    private readonly ComboBox _imageFormat = new() { MinWidth = 140 };
+    private readonly TextBlock _formatStatus = new() { Text = "Format: not applied (Nikon Remote SDK v2 only)" };
     private CancellationTokenSource? _operation;
     private int _attempts, _successes, _failures;
     private IReadOnlyList<SubjectRecord> _roster = Array.Empty<SubjectRecord>();
@@ -150,6 +153,29 @@ public sealed class MainWindow : Window
         var connectRow = new WrapPanel();
         Add(connectRow, "CONNECT", Connect); Add(connectRow, "DISCONNECT", Disconnect);
         root.Children.Add(connectRow);
+
+        // Save folder + capture format.
+        root.Children.Add(SectionHeader("SAVE SETTINGS"));
+        var saveRow = new WrapPanel();
+        saveRow.Children.Add(new Label { Content = "Save folder" }); saveRow.Children.Add(_saveFolder);
+        var saveBrowseButton = new Button { Content = "BROWSE...", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        saveBrowseButton.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Select the folder to save captured photos into" };
+            if (dialog.ShowDialog() == true) _saveFolder.Text = dialog.FolderName;
+        };
+        saveRow.Children.Add(saveBrowseButton);
+        root.Children.Add(saveRow);
+
+        var formatRow = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+        _imageFormat.Items.Add("JPEG"); _imageFormat.Items.Add("RAW"); _imageFormat.Items.Add("RAW + JPEG");
+        _imageFormat.SelectedIndex = 0;
+        formatRow.Children.Add(new Label { Content = "Capture format" }); formatRow.Children.Add(_imageFormat);
+        var applyFormatButton = new Button { Content = "APPLY FORMAT", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        applyFormatButton.Click += async (_, _) => await ApplyImageFormat();
+        formatRow.Children.Add(applyFormatButton);
+        root.Children.Add(formatRow);
+        root.Children.Add(_formatStatus);
 
         // Step 3: capture.
         root.Children.Add(SectionHeader("3. CAPTURE"));
@@ -375,9 +401,45 @@ public sealed class MainWindow : Window
             await SwitchCamera();
             if (_activeSelectionIndex != _cameraType.SelectedIndex) return; // SwitchCamera failed and logged why
         }
-        try { await _camera.ConnectAsync(); UpdateCamera(); Log("Connected."); } catch (Exception e) { Log($"ERROR: {e.Message}"); }
+        try
+        {
+            await _camera.ConnectAsync(); UpdateCamera(); Log("Connected.");
+            await ApplyImageFormat();
+        }
+        catch (Exception e) { Log($"ERROR: {e.Message}"); }
     }
     private async Task Disconnect() { await _camera.DisconnectAsync(); UpdateCamera(); Log("Disconnected."); }
+
+    private async Task ApplyImageFormat()
+    {
+        if (_camera is not NikonRemoteSdkV2CameraDriver nikon)
+        {
+            _formatStatus.Text = "Format: not applied (Nikon Remote SDK v2 only)";
+            return;
+        }
+        if (_camera.State != CameraConnectionState.Connected)
+        {
+            _formatStatus.Text = "Format: not applied (connect the camera first)";
+            return;
+        }
+        var format = _imageFormat.SelectedIndex switch
+        {
+            1 => ImageFormat.Raw,
+            2 => ImageFormat.RawAndJpeg,
+            _ => ImageFormat.Jpeg
+        };
+        try
+        {
+            await nikon.SetImageFormatAsync(format);
+            _formatStatus.Text = $"Format: {_imageFormat.SelectedItem} applied.";
+            Log($"Capture format set to {_imageFormat.SelectedItem}.");
+        }
+        catch (Exception exception)
+        {
+            _formatStatus.Text = $"Format: failed to apply ({exception.Message})";
+            Log($"ERROR: could not set capture format: {exception.Message}");
+        }
+    }
     private Task Capture() => CaptureManyInternal(1);
     private Task CaptureMany() => int.TryParse(_count.Text, out var count) && count > 0 ? CaptureManyInternal(count) : Task.CompletedTask;
     private async Task CaptureManyInternal(int count)
@@ -391,7 +453,8 @@ public sealed class MainWindow : Window
             for (var shot = 1; shot <= count; shot++)
             {
                 _operation.Token.ThrowIfCancellationRequested();
-                var request = new CaptureRequest(sessionId, subject, "MANUAL", shot, Path.Combine(Environment.CurrentDirectory, "captures", subject));
+                var baseFolder = string.IsNullOrWhiteSpace(_saveFolder.Text) ? Path.Combine(Environment.CurrentDirectory, "captures") : _saveFolder.Text.Trim();
+                var request = new CaptureRequest(sessionId, subject, "MANUAL", shot, Path.Combine(baseFolder, subject));
                 var result = await _camera.CaptureAsync(request, _operation.Token); _attempts++;
                 await _store.RecordCaptureAsync(sessionId, request, result, _operation.Token);
                 if (result.Success) _successes++; else _failures++;

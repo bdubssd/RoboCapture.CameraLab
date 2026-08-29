@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using RoboCapture.Core;
 using RoboCapture.NikonAdapter;
+using RoboCapture.Vision;
 
 namespace RoboCapture.CameraLab;
 
@@ -31,8 +32,53 @@ public static class Program
             return;
         }
 
+        var visionTestArg = args.FirstOrDefault(arg => arg.StartsWith("--vision-test=", StringComparison.OrdinalIgnoreCase));
+        if (visionTestArg is not null)
+        {
+            RunVisionTest(visionTestArg);
+            return;
+        }
+
         var application = new Application();
         application.Run(new MainWindow());
+    }
+
+    /// <summary>
+    /// Offline calibration harness: scores every .jpg/.jpeg in a folder with
+    /// <see cref="OpenCvShotQualityFilter"/> and prints the result for each — no camera needed.
+    /// Run against a folder of sample deliveries (blinking, smiling, neutral, off-angle) to see
+    /// how the current heuristics behave before wiring this into the live capture flow. See
+    /// docs/AUTONOMOUS_CAPTURE_PLAN.md step 1.
+    /// </summary>
+    private static void RunVisionTest(string visionTestArg)
+    {
+        var folder = visionTestArg.Split('=', 2)[1];
+        if (!Directory.Exists(folder))
+        {
+            Console.WriteLine($"ERROR: folder not found: {folder}");
+            return;
+        }
+
+        using var filter = new OpenCvShotQualityFilter();
+        var files = Directory.GetFiles(folder)
+            .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+        if (files.Count == 0)
+        {
+            Console.WriteLine($"No .jpg/.jpeg files found in {folder}");
+            return;
+        }
+
+        var passed = 0;
+        foreach (var file in files)
+        {
+            var score = filter.Score(File.ReadAllBytes(file));
+            if (score.Pass) passed++;
+            Console.WriteLine($"{Path.GetFileName(file)}: face={score.FaceDetected} eyesOpen={score.EyesOpen} " +
+                $"smile={score.SmileDetected} PASS={score.Pass} — {score.Reason}");
+        }
+        Console.WriteLine($"SUMMARY: {passed}/{files.Count} passed");
     }
 
     private static async Task RunNikonTestAsync(string[] args, string nikonTestArg)

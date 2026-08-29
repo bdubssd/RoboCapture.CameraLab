@@ -14,4 +14,7 @@
     <ProjectReference Include="..\RoboCapture.NikonAdapter\RoboCapture.NikonAdapter.csproj" />
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RoboCapture.Vision\RoboCapture.Vision.csproj" />
+  </ItemGroup>
 </Project>

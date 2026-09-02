@@ -396,8 +396,18 @@ public sealed class MainWindow : Window
         var names = new List<string>();
         try
         {
+            // Built from every known profile's own DetectKeywords (plus "Nikon" itself) rather
+            // than a separately hand-maintained keyword list — some Nikon bodies enumerate in
+            // Windows with a bare model number and no "Nikon" prefix at all (confirmed: a D850
+            // shows up as literally "D850", PNPClass WPD, not "Nikon D850" or anything
+            // Nikon-branded), so a query that only matched "%Nikon%"/Z-series names silently
+            // never found it even when it was fully connected and working. Keeping the WHERE
+            // clause derived from KnownProfiles means adding a new camera profile automatically
+            // makes it detectable too, with no separate query to remember to update.
+            var keywords = new[] { "Nikon" }.Concat(KnownProfiles.SelectMany(p => p.DetectKeywords)).Distinct();
+            var clause = string.Join(" OR ", keywords.Select(k => $"Name LIKE '%{k.Replace("'", "''")}%'"));
             using var searcher = new System.Management.ManagementObjectSearcher(
-                "SELECT Name FROM Win32_PnPEntity WHERE Name LIKE '%Nikon%' OR Name LIKE '%Z6%' OR Name LIKE '%Z7%' OR Name LIKE '%Z8%' OR Name LIKE '%Z9%' OR Name LIKE '%Z5%' OR Name LIKE '%Zf%'");
+                $"SELECT Name FROM Win32_PnPEntity WHERE {clause}");
             foreach (var obj in searcher.Get())
             {
                 var name = obj["Name"]?.ToString();

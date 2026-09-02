@@ -150,6 +150,14 @@ public sealed class NikonCameraDriver : ICameraDriver, IAsyncDisposable
             if (openResult != Maid3.ResultNoError)
                 throw new InvalidOperationException($"Failed to open Nikon camera source (result {openResult}).");
             SetCallback(_sourceObject, Maid3.CapEventProc, _eventProc);
+
+            // Cameras default to card-only saving; without SDRAM (host-downloadable) enabled,
+            // Capture succeeds (shutter fires, no error) but no item is ever offered to the
+            // host — confirmed on a D850 as "No image item was produced by the camera." after
+            // EnumChildren. Same fix as the Z6III's Remote SDK v2 driver (Maid3V2.CapSaveMedia).
+            var saveMediaResult = ExecuteAsyncCommand(_sourceObject, Maid3.CommandCapSet, Maid3.CapSaveMedia,
+                Maid3.DataTypeUnsigned, (IntPtr)Maid3.SaveMediaCardAndSdram, DefaultTimeout);
+            Event?.Invoke(new CameraEvent(DateTimeOffset.UtcNow, DriverId, State, "saveMedia", saveMediaResult.ToString()));
         }
 
         var cameraName = GetStringCapability(_sourceObject, Maid3.CapName) ?? "Nikon camera";
@@ -195,8 +203,19 @@ public sealed class NikonCameraDriver : ICameraDriver, IAsyncDisposable
         if (captureResult != Maid3.ResultNoError)
             return Failed($"Capture command failed (result {captureResult}).", captureStarted);
 
-        ExecuteAsyncCommand(_sourceObject, Maid3.CommandEnumChildren, 0, Maid3.DataTypeNull, IntPtr.Zero, DefaultTimeout);
-        var itemIds = GetChildIds(_sourceObject);
+        // kNkMAIDCapability_Capture doesn't return control until shooting itself is complete
+        // on the camera side, but that isn't a guarantee the resulting item is enumerable the
+        // instant the command returns — the module may still be finishing writing/processing
+        // the image. Retry EnumChildren a few times with a short delay rather than giving up on
+        // the very first empty result (same reasoning as the Z6III's EnumDevices retry).
+        List<uint> itemIds = [];
+        var enumDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while (itemIds.Count == 0 && DateTime.UtcNow < enumDeadline)
+        {
+            ExecuteAsyncCommand(_sourceObject, Maid3.CommandEnumChildren, 0, Maid3.DataTypeNull, IntPtr.Zero, DefaultTimeout);
+            itemIds = GetChildIds(_sourceObject);
+            if (itemIds.Count == 0) Thread.Sleep(300);
+        }
         if (itemIds.Count == 0)
             return Failed("No image item was produced by the camera.", captureStarted);
         var itemId = itemIds[^1];
@@ -208,8 +227,16 @@ public sealed class NikonCameraDriver : ICameraDriver, IAsyncDisposable
             if (openItemResult != Maid3.ResultNoError)
                 return Failed($"Failed to open captured item (result {openItemResult}).", captureStarted);
 
-            ExecuteAsyncCommand(itemObject, Maid3.CommandEnumChildren, 0, Maid3.DataTypeNull, IntPtr.Zero, DefaultTimeout);
-            var dataIds = GetChildIds(itemObject);
+            // Same reasoning as the retry above this one: the item object being open and
+            // enumerable doesn't guarantee its own Data child is enumerable yet either.
+            List<uint> dataIds = [];
+            var dataEnumDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+            while (dataIds.Count == 0 && DateTime.UtcNow < dataEnumDeadline)
+            {
+                ExecuteAsyncCommand(itemObject, Maid3.CommandEnumChildren, 0, Maid3.DataTypeNull, IntPtr.Zero, DefaultTimeout);
+                dataIds = GetChildIds(itemObject);
+                if (dataIds.Count == 0) Thread.Sleep(300);
+            }
             if (dataIds.Count == 0)
                 return Failed("Captured item produced no downloadable data.", captureStarted);
 

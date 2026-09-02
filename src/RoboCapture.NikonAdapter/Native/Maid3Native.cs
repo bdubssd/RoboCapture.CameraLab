@@ -124,5 +124,15 @@ internal static class Maid3
     internal const uint CapModuleMode = 0x8101;
     internal const uint CapCameraType = 0x81d7;
 
+    // kNkMAIDCapability_SaveMedia (0x8305): same capability id as the Z6III's Remote SDK v2
+    // driver (see Maid3V2.CapSaveMedia) — defaults to Card-only, meaning Capture succeeds and
+    // the shutter fires but no downloadable item is ever offered to the host. Confirmed on a
+    // D850: without setting this, EnumChildren after CapCapture returns zero items ("No image
+    // item was produced by the camera").
+    internal const uint CapSaveMedia = 0x8305;
+    internal const uint SaveMediaCard = 0;
+    internal const uint SaveMediaSdram = 1;
+    internal const uint SaveMediaCardAndSdram = 2;
+
     internal const uint ModuleModeController = 1;
 }

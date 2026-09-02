@@ -172,11 +172,68 @@ Nikon's own SDK bug goes unresolved.
    own corporate remote-shooting system, so this general area is under active firmware
    development.
 
-## Known limitation: D850 not detected via USB
+## D850: connects, capture-to-download not yet reliable (2026-08-29)
 
-The D850 doesn't appear as a source at all — confirmed not a bug in this codebase, since
-Nikon's own official `Type0022Ctrl.exe` sample (built into the SDK download) also reports "There
-is no Source object" against the same camera/cable. Windows lists the D850 partly through a USB
-Mass Storage interface (`USBSTOR#DISK&VEN_SONY&PROD_QD-G64F`) rather than PTP — check the
-camera's **Setup Menu → USB** setting is `MTP/PTP`, not Mass Storage, and re-seat the USB cable
-after changing it.
+**Update: the earlier "D850 not detected via USB" diagnosis below (kept for history) was
+wrong** — or at least incomplete. The D850 **does** connect successfully via this app's legacy
+MAID3 driver; the real blocker was a bug in `MainWindow`'s auto-detect, not a camera/USB-mode
+issue. Confirmed on real hardware: `Get-CimInstance Win32_PnPEntity` shows the connected D850 as
+literally the bare name `"D850"` (PNPClass `WPD`, `Status: OK`) — no "Nikon" prefix at all,
+unlike the Z6III (`"NIKON Z6_3"`). `GetConnectedNikonDeviceNames`'s WMI query only matched
+`%Nikon%` and Z-series keywords, so it silently never found the D850 even when it was fully
+connected and working — auto-detect just never selected it, and no one had connected `Custom
+(advanced)`-style with the D850 profile manually before. Fixed by deriving the WMI `WHERE`
+clause from every `KnownProfiles` entry's own `DetectKeywords` (plus "Nikon" itself) instead of
+a separately hand-maintained list — a new camera profile is now automatically detectable too.
+
+With that fixed, `Connect()` succeeds and reports real camera info
+(`Nikon D850 | ID: 1 | Tier: Full`). Capture is still unreliable:
+
+- First capture attempt returned `kNkMAIDResult_OutOfFocus` (137) — confirmed against the
+  D850's own SDK header (`Maid3d1.h`), a genuine vendor result code (`kNkMAIDResult_VendorBase
+  + 10`), not a bug: the camera's focus-priority release mode refused to fire because nothing
+  was in focus. Camera-side fix (lens to MF, or Custom Setting a2 → Release priority), not a
+  driver issue.
+- After that, several attempts returned `kNkMAIDResult_CameraNotFound` (134), failing near-
+  instantly (~0-1ms) even after an app-level Disconnect→Connect. Matches the same USB/PTP
+  session-fatigue pattern documented for the Z6III below — required an actual physical
+  power-cycle to recover, not just a driver-level reconnect.
+- After the physical reset, `Capture` itself started succeeding (shutter fires, no error), but
+  `EnumChildren` on the source found zero item children — `"No image item was produced by the
+  camera."` Root cause: **`NikonCameraDriver` (unlike `NikonRemoteSdkV2CameraDriver`) never set
+  `kNkMAIDCapability_SaveMedia` (0x8305)** — same capability id, same default-to-card-only
+  behavior, confirmed present in the D850's own header (`Maid3d1.h`). Fixed: `Connect()` now
+  sets it to `Card+SDRAM` right after opening the source object, the same way the Z6III driver
+  does.
+- Even with `SaveMedia` set, `EnumChildren` immediately after `Capture` returns doesn't reliably
+  see the new item/data yet — the D850's usage doc says `kNkMAIDCapability_Capture` "does not
+  return control until shooting is completed," but that isn't the same guarantee as the
+  resulting item being enumerable that instant. Added a short retry loop (up to 3s, 300ms
+  intervals) around both `EnumChildren` calls (source→item and item→data), mirroring the
+  Z6III's `EnumDevices` retry fix earlier this session. This got one capture attempt to advance
+  a level deeper (found the item, but then found no data child) before a later attempt regressed
+  to finding no item at all again — inconsistent, unresolved.
+
+**Net state:** connect is solid and repeatable. Capture-to-download on the D850 is not yet
+reliable — every attempt so far has failed at a different stage, which reads as multiple
+independent issues (focus-priority mode, session fatigue, missing SaveMedia, EnumChildren
+timing) rather than one root cause, and this is genuinely new territory since the D850 had never
+connected in this project before today. Next steps if picked back up: try with the lens in
+manual focus set to a real target first (removes the OutOfFocus variable entirely), and if that
+still doesn't produce an item, extend the EnumChildren retry window further (3s may not be
+enough) and log every native event the D850 fires during a capture the way the Z6III's
+`data=0/1` `CaptureComplete` diagnosis was done, to see what's actually happening at the
+protocol level rather than continuing to guess at retry windows.
+
+<details>
+<summary>Superseded diagnosis (kept for history, was based on the same auto-detect bug above)</summary>
+
+The D850 didn't appear as a source at all — thought at the time to be confirmed not a bug in
+this codebase, since Nikon's own official `Type0022Ctrl.exe` sample (built into the SDK
+download) also reported "There is no Source object" against the same camera/cable. Windows
+lists the D850 partly through a USB Mass Storage interface (`USBSTOR#DISK&VEN_SONY&PROD_QD-
+G64F`) rather than PTP, which was suspected as the cause — checking the camera's **Setup Menu →
+USB** setting is `MTP/PTP`, not Mass Storage. This may still be worth checking if connect
+problems return, but the actual blocker turned out to be the auto-detect bug above; the D850
+connects fine via a real PTP interface once selected.
+</details>

@@ -237,3 +237,25 @@ USB** setting is `MTP/PTP`, not Mass Storage. This may still be worth checking i
 problems return, but the actual blocker turned out to be the auto-detect bug above; the D850
 connects fine via a real PTP interface once selected.
 </details>
+
+## Persistent local SDK installation
+
+The master SDK folder is vendor-sdks/nikon/modules. Build and publish copy its
+DLLs, model modules, and configuration profiles beside the application. Relative
+SDK paths resolve from the application directory and its ancestors before falling
+back to the working directory. The copied payload is refreshed on rebuild; it is
+not a live symbolic link to the master folder.
+
+Locally available Z-series configuration profiles are also embedded in the adapter
+assembly at build time. Before native SDK initialization, missing or empty profiles
+in %LocalAppData%\Nikon\NXTether are restored from the SDK folder, with embedded
+resources as a fallback. Nonempty existing profiles are preserved. Temporary files
+and rename prevent interrupted copies from leaving partially written profiles.
+The repair runs for each new SDK initialization and applies to the current Windows
+user. It does not require a background service or changes to other users' profiles.
+
+Proprietary SDK files remain gitignored. A new development computer still needs
+its locally supplied Nikon SDK to build a complete hardware-enabled app. A built
+app retains its bundled payload and embedded profiles. Observe Nikon's license
+when distributing vendor files. Native initialization errors now advise restarting
+the app; profile repair does not resolve every possible SDK or camera failure.

@@ -97,7 +97,7 @@ public sealed class NikonCameraDriver : ICameraDriver, IAsyncDisposable
     {
         if (_libraryHandle == IntPtr.Zero)
         {
-            var moduleDirectory = Path.GetFullPath(_moduleDirectory);
+            var moduleDirectory = NikonSdkInstallation.ResolveModuleDirectory(_moduleDirectory);
             Kernel32.SetDllDirectoryW(moduleDirectory);
             var modulePath = Path.GetFullPath(Path.Combine(moduleDirectory, _moduleFileName));
             _libraryHandle = Kernel32.LoadLibraryW(modulePath);

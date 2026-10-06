@@ -168,7 +168,8 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
 
     private void InitializeSdkCore()
     {
-        var moduleDirectory = Path.GetFullPath(_moduleDirectory);
+        var moduleDirectory = NikonSdkInstallation.ResolveModuleDirectory(_moduleDirectory);
+        NikonSdkInstallation.EnsureProfiles(moduleDirectory);
         Kernel32.SetDllDirectoryW(moduleDirectory);
         var modulePath = Path.GetFullPath(Path.Combine(moduleDirectory, _moduleFileName));
         _libraryHandle = Kernel32.LoadLibraryW(modulePath);
@@ -206,7 +207,7 @@ public sealed class NikonRemoteSdkV2CameraDriver : ICameraDriver, IAsyncDisposab
             var freePtr = Marshal.GetFunctionPointerForDelegate(_freeMemory);
             var initResult = _initializeSdk(allocPtr, freePtr, callbackPtr, out _, IntPtr.Zero);
             if (initResult != 0)
-                throw new InvalidOperationException($"Failed to initialize Nikon Remote SDK (result {initResult}).");
+                throw new InvalidOperationException($"Failed to initialize Nikon Remote SDK (result {initResult}). Close RoboCapture completely and reopen it before retrying. If it persists, check that the camera is awake and other tethering apps are closed.");
             _sdkInitialized = true;
         }
         finally { Marshal.FreeHGlobal(callbackPtr); }

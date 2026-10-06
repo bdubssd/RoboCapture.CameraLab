@@ -17,4 +17,11 @@
   <ItemGroup>
     <ProjectReference Include="..\RoboCapture.Vision\RoboCapture.Vision.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../vendor-sdks/nikon/modules/**/*.dll;../../vendor-sdks/nikon/modules/**/*.md3;../../vendor-sdks/nikon/modules/**/*.config">
+      <Link>vendor-sdks/nikon/modules/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

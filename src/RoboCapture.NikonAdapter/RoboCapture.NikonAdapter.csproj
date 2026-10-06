@@ -9,4 +9,10 @@
   <ItemGroup>
     <ProjectReference Include="..\RoboCapture.Core\RoboCapture.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Local proprietary profiles embedded at build time; not committed. -->
+    <EmbeddedResource Include="../../vendor-sdks/nikon/modules/z-unified/*.config">
+      <LogicalName>NikonProfiles.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
 </Project>

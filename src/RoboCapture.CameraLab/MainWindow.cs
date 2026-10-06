@@ -10,7 +10,7 @@ using RoboCapture.Vision;
 
 namespace RoboCapture.CameraLab;
 
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
     private sealed record CameraProfile(string DisplayName, string ModuleFolder, string ModuleFile, bool IsLegacy, string[] DetectKeywords);
 
@@ -61,7 +61,8 @@ public sealed class MainWindow : Window
     public MainWindow()
     {
         Title = "RoboCapture Camera Lab 0.2";
-        Width = 900; Height = 650; MinWidth = 700; MinHeight = 500;
+        Width = 1180; Height = 900; MinWidth = 760; MinHeight = 600;
+        ConfigureAppearance();
         WireCamera(new SimulatedCameraDriver { CaptureLatencyMs = 25, TransferLatencyMs = 10 });
         Content = Layout();
         Loaded += async (_, _) =>
@@ -178,7 +179,7 @@ public sealed class MainWindow : Window
     }
 
     private static TextBlock SectionHeader(string text) =>
-        new() { Text = text, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 10, 0, 2) };
+        new() { Tag = "studio-section", Text = text, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 10, 0, 2) };
 
     private UIElement Layout()
     {
@@ -192,6 +193,8 @@ public sealed class MainWindow : Window
         root.Children.Add(SectionHeader("1. CHOOSE CAMERA"));
         var detectRow = new WrapPanel();
         var detectButton = new Button { Content = "AUTO-DETECT CAMERA", Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        Emphasize(detectButton);
+        detectButton.Content = "Find camera";
         detectButton.Click += (_, _) => DetectCamera();
         detectRow.Children.Add(detectButton); detectRow.Children.Add(_detectStatus);
         root.Children.Add(detectRow);
@@ -291,12 +294,12 @@ public sealed class MainWindow : Window
         var liveViewPanel = new StackPanel { Margin = new Thickness(0, 0, 16, 0) };
         liveViewPanel.Children.Add(SectionHeader("LIVE VIEW"));
         liveViewPanel.Children.Add(_liveViewStatus);
-        liveViewPanel.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Child = _liveViewImage });
+        liveViewPanel.Children.Add(new Border { Background = Ink("#142D3B"), BorderBrush = Ink("#274453"), CornerRadius = new CornerRadius(10), Padding = new Thickness(12), BorderThickness = new Thickness(1), Child = _liveViewImage });
         previewRow.Children.Add(liveViewPanel);
         var lastCapturePanel = new StackPanel();
         lastCapturePanel.Children.Add(SectionHeader("LAST CAPTURE"));
         lastCapturePanel.Children.Add(_lastCapturePreviewStatus);
-        lastCapturePanel.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Child = _lastCaptureImage });
+        lastCapturePanel.Children.Add(new Border { Background = Ink("#142D3B"), BorderBrush = Ink("#274453"), CornerRadius = new CornerRadius(10), Padding = new Thickness(12), BorderThickness = new Thickness(1), Child = _lastCaptureImage });
         previewRow.Children.Add(lastCapturePanel);
         root.Children.Add(previewRow);
 
@@ -317,12 +320,15 @@ public sealed class MainWindow : Window
 
         root.Children.Add(SectionHeader("LOG"));
         root.Children.Add(_log);
-        return new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        return ComposeStudioLayout(root);
     }
 
     private static void Add(Panel panel, string text, Func<Task> action)
     {
         var button = new Button { Content = text, Margin = new Thickness(2), Padding = new Thickness(7, 4, 7, 4) };
+        if (text == "CAPTURE") { button.Content = "Capture photo"; Emphasize(button, capture: true); }
+        else if (text == "LIVE VIEW ON") { button.Content = "Start live view"; Emphasize(button); }
+        else if (text == "STOP") { button.Foreground = Ink("#A12E3A"); button.Background = Ink("#FCE8E9"); }
         button.Click += async (_, _) => await action(); panel.Children.Add(button);
     }
 

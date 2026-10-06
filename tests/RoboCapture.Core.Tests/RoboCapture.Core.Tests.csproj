@@ -15,4 +15,7 @@
     <ProjectReference Include="..\..\src\RoboCapture.Core\RoboCapture.Core.csproj" />
     <ProjectReference Include="..\..\src\RoboCapture.Persistence\RoboCapture.Persistence.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/RoboCapture.NikonAdapter/NikonSdkInstallation.cs" Link="NikonSdkInstallation.cs" />
+  </ItemGroup>
 </Project>
